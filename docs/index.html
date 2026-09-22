@@ -3,22 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%236ea8fe'/%3E%3Ctext x='50' y='68' font-size='60' text-anchor='middle' fill='%230b1220' font-family='sans-serif' font-weight='700'%3Ea%3C/text%3E%3C/svg%3E">
-<title>anagnor — node image filters</title>
+<link rel="icon" href="assets/logo-mark.png">
+<link rel="apple-touch-icon" href="assets/logo-mark.png">
+<title>avayn0p — node image filters</title>
 <style>
   :root{
-    --bg:#0f1115;
-    --panel:#181b22;
-    --panel-2:#20242e;
-    --panel-3:#262b36;
-    --border:#2b303b;
-    --border-2:#3a4150;
-    --text:#e7e9ee;
-    --muted:#9aa3b2;
-    --accent:#6ea8fe;
-    --accent-2:#7ee787;
-    --danger:#ff7b72;
-    --wire:#6ea8fe;
+    /* avayn0p — neon blue + red on near-black */
+    --bg:#04050c;
+    --panel:#0a0e19;
+    --panel-2:#111826;
+    --panel-3:#18202f;
+    --border:#1e2740;
+    --border-2:#33507e;
+    --text:#e9f0ff;
+    --muted:#8a97b4;
+    --accent:#3f9bff;      /* neon blue */
+    --accent-2:#79d4ff;    /* light cyan — values / highlights */
+    --danger:#ff2f43;      /* brand red */
+    --wire:#4aa4ff;
+    --glow:rgba(63,155,255,.55);
     --radius:14px;
   }
   *{box-sizing:border-box}
@@ -27,7 +30,8 @@
   body{
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:var(--bg);
+    background:radial-gradient(1100px 560px at 50% -14%, #0c1c36 0%, var(--bg) 62%) fixed;
+    background-color:var(--bg);
     color:var(--text);
     line-height:1.5;
     overflow:hidden;
@@ -35,13 +39,14 @@
   /* ---- top bar ---- */
   .topbar{
     display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-    padding:10px 16px;border-bottom:1px solid var(--border);
-    background:linear-gradient(180deg,#161a22,#12151b);
+    padding:9px 16px;border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#070c18,#05060f);
+    box-shadow:0 1px 0 rgba(63,155,255,.12), 0 6px 22px rgba(0,0,0,.5);
     position:relative;z-index:5;
   }
-  .brand{display:flex;flex-direction:column;line-height:1.1;margin-right:6px}
-  .brand h1{margin:0;font-size:1.15rem;letter-spacing:.5px}
-  .brand span{color:var(--muted);font-size:.72rem}
+  .brand{display:flex;flex-direction:column;line-height:1;gap:3px;margin-right:4px}
+  .brand .wordmark{height:26px;width:auto;display:block;filter:drop-shadow(0 0 7px var(--glow))}
+  .brand span{color:var(--muted);font-size:.66rem;letter-spacing:.6px;padding-left:2px;text-transform:uppercase}
   .palette{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
   .palette .sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}
   .chip{
@@ -72,17 +77,21 @@
   /* ---- editor canvas ---- */
   #stage{
     position:absolute;inset:0;top:0;
-    overflow:hidden;cursor:grab;touch-action:none;
-    background:
-      radial-gradient(1400px 700px at 50% -10%,#1b2130 0%,var(--bg) 60%);
+    overflow:hidden;cursor:grab;touch-action:none;background:transparent;
   }
   #stage.panning{cursor:grabbing}
-  #grid{position:absolute;inset:0;pointer-events:none;opacity:.5}
+  #watermark{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(46vmin,440px);opacity:.06;pointer-events:none;z-index:0;
+    filter:drop-shadow(0 0 30px var(--glow));
+  }
+  #grid{position:absolute;inset:0;pointer-events:none;opacity:.6;z-index:0}
   #world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
   #wires{position:absolute;left:0;top:0;overflow:visible;width:10px;height:10px;pointer-events:none}
-  #wires path.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.85;pointer-events:stroke;cursor:pointer}
-  #wires path.wire:hover{stroke:var(--danger);opacity:1;stroke-width:3.2}
-  #wires path.temp{fill:none;stroke:var(--accent-2);stroke-width:2.4;stroke-dasharray:5 5;opacity:.9}
+  #wires{filter:drop-shadow(0 0 2.5px var(--glow))}
+  #wires path.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.9;pointer-events:stroke;cursor:pointer}
+  #wires path.wire:hover{stroke:var(--danger);opacity:1;stroke-width:3.4}
+  #wires path.temp{fill:none;stroke:var(--accent-2);stroke-width:2.6;stroke-dasharray:5 5;opacity:.95}
 
   /* ---- node ---- */
   .node{
@@ -91,7 +100,7 @@
     box-shadow:0 8px 24px rgba(0,0,0,.35);
     font-size:.85rem;user-select:none;
   }
-  .node.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 10px 30px rgba(0,0,0,.5)}
+  .node.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 20px rgba(63,155,255,.28),0 10px 30px rgba(0,0,0,.55)}
   .node .head{
     display:flex;align-items:center;gap:7px;
     padding:8px 10px;cursor:grab;border-bottom:1px solid var(--border);
@@ -148,13 +157,33 @@
 
   /* ports */
   .port{
-    position:absolute;width:14px;height:14px;border-radius:50%;
-    background:var(--panel-3);border:2px solid var(--border-2);cursor:crosshair;z-index:2;
+    position:absolute;width:15px;height:15px;border-radius:50%;
+    background:var(--panel-3);border:2px solid var(--border-2);cursor:crosshair;z-index:3;
+    touch-action:none;
   }
+  .port::before{content:"";position:absolute;inset:-12px;border-radius:50%}  /* enlarge the touch/click target */
   .port:hover{border-color:var(--accent);background:var(--accent)}
   .port.in{left:-8px}
-  .port.out{right:-8px;border-color:var(--accent);background:#2a4a7a}
-  .port.connected{background:var(--accent)}
+  .port.out{right:-8px;border-color:var(--accent);background:#27508c;box-shadow:0 0 8px rgba(63,155,255,.5)}
+  .port.connected{background:var(--accent);box-shadow:0 0 8px rgba(63,155,255,.6)}
+  .port.out.arming{background:var(--accent-2);border-color:var(--accent-2);animation:portpulse 1s ease-in-out infinite}
+  @keyframes portpulse{
+    0%,100%{box-shadow:0 0 0 3px rgba(121,212,255,.28),0 0 10px rgba(121,212,255,.85)}
+    50%{box-shadow:0 0 0 8px rgba(121,212,255,.08),0 0 18px rgba(121,212,255,1)}
+  }
+  /* connect mode: every input dot becomes a big glowing tap target */
+  #stage.connecting .port.in{
+    width:22px;height:22px;left:-12px;border-color:var(--accent-2);background:var(--accent-2);
+    box-shadow:0 0 0 6px rgba(121,212,255,.14),0 0 14px rgba(121,212,255,.9);z-index:6;
+  }
+  @media (pointer:coarse){
+    .port{width:20px;height:20px}
+    .port.in{left:-11px} .port.out{right:-11px}
+    .port::before{inset:-15px}
+  }
+  /* touch: let graph gestures win, but keep native control dragging (sliders/selects) */
+  .node,.node .head,.node .body,.chip{touch-action:none}
+  .p-row input,.p-row select,.filebtn,.params{touch-action:auto}
   .port .plabel{
     position:absolute;font-size:.62rem;color:var(--muted);white-space:nowrap;top:-3px;pointer-events:none;
   }
@@ -186,7 +215,7 @@
 <body>
 
 <div class="topbar">
-  <div class="brand"><h1>anagnor</h1><span>node image filters</span></div>
+  <div class="brand"><img class="wordmark" src="assets/logo-wordmark.png" alt="avayn0p"><span>node image filters</span></div>
   <div class="palette" id="palette"><!-- filled by JS --></div>
   <div class="spacer"></div>
   <div class="zoomctl">
@@ -199,6 +228,7 @@
 </div>
 
 <div id="stage">
+  <img id="watermark" src="assets/logo-mark.png" alt="">
   <canvas id="grid"></canvas>
   <div id="world">
     <svg id="wires"></svg>
@@ -206,10 +236,11 @@
   </div>
   <div id="help">
     <button class="close" id="helpClose" title="Dismiss">×</button>
-    <b>How it works.</b> Drag a block from the top bar onto the canvas (or click it).
-    Drag from a node's <b>right</b> dot to another node's <b>left</b> dot to connect them.
-    <b>Click a block</b> to reveal its parameters. Drag the empty canvas to pan; scroll to zoom.
-    Click a wire to remove it. Every block previews its own output — download from any one.
+    <b>How it works.</b> Tap a block in the top bar to drop it on the canvas (or drag it).
+    <b>To connect:</b> tap a block's <b>right</b> dot, then tap the target block —
+    on a computer you can also just drag between the dots. <b>Tap a block</b> to reveal its
+    parameters. Drag the empty canvas to pan, pinch or scroll to zoom, tap a wire to remove it.
+    Every block previews its own output — download a PNG from any one.
   </div>
   <div id="toast"></div>
 </div>
@@ -979,6 +1010,7 @@ function makeNode(type,x,y){
 function addNode(type,x,y){ const n=makeNode(type,x,y); NODES[n.id]=n; renderNode(n); return n; }
 function removeNode(id){
   const n=NODES[id]; if(!n) return;
+  if(armed) clearArmed();
   // Drop connections that referenced this node.
   Object.values(NODES).forEach(other=>{ other.inputs=other.inputs.map(s=> s===id?null:s); });
   if(n.el) n.el.remove();
@@ -1156,10 +1188,10 @@ function refreshParamVisibility(node){
 function selectNode(id){
   selectedId=id;
   Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===id); });
-  if(id){ const n=NODES[id]; // bring to front
-    if(n&&n.el) world.appendChild(n.el);
-    requestAnimationFrame(()=>{ if(n) { positionInPorts(n); drawWires(); } });
-  }
+  if(id){ const n=NODES[id]; if(n&&n.el) world.appendChild(n.el); }   // bring to front
+  // Selecting expands one node and collapses another, changing heights — so
+  // reflow every node's ports and redraw the wires once layout settles.
+  requestAnimationFrame(()=>{ Object.values(NODES).forEach(positionInPorts); drawWires(); });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1170,17 +1202,26 @@ function wireNodeInteractions(node){
   // Drag the node by its header (and body background).
   function startDrag(e){
     if(e.button!=null && e.button!==0) return;
+    const wasArmed=armed;                 // armed before this press → a tap here means "connect to me"
     selectNode(node.id);
     const start=screenToWorld(e.clientX,e.clientY);
     const ox=node.x, oy=node.y;
     let moved=false;
     function move(ev){
       const w=screenToWorld(ev.clientX,ev.clientY);
-      node.x=ox+(w.x-start.x); node.y=oy+(w.y-start.y);
-      node.el.style.left=node.x+'px'; node.el.style.top=node.y+'px';
-      moved=true; drawWires();
+      if(!moved && Math.hypot(w.x-start.x,w.y-start.y) > 3/view.scale) moved=true;   // ignore finger jitter
+      if(moved){ node.x=ox+(w.x-start.x); node.y=oy+(w.y-start.y); node.el.style.left=node.x+'px'; node.el.style.top=node.y+'px'; drawWires(); }
     }
-    function up(){ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); }
+    function up(){
+      document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
+      if(wasArmed && !moved){             // tapped a block while a connection was armed → wire into it
+        if(NODE_TYPES[node.type].inputs.length && wasArmed!==node.id){
+          let idx=node.inputs.findIndex(s=>s==null); if(idx<0) idx=0;   // first free input, else the first
+          connect(wasArmed, node.id, idx);
+        }
+        clearArmed();
+      }
+    }
     document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
     e.stopPropagation();
   }
@@ -1192,23 +1233,44 @@ function wireNodeInteractions(node){
   node.el.querySelectorAll('.port').forEach(port=>{
     port.addEventListener('pointerdown',e=>{
       e.stopPropagation(); e.preventDefault();
-      if(port.dataset.kind==='out') startWire(node.id, e);
-      else { // input port: click disconnects; drag rewires from here
+      if(port.dataset.kind==='out'){
+        startWireDrag(node.id, e);          // drag OR tap-to-arm (see startWireDrag)
+      }else{
         const idx=+port.dataset.idx;
-        if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); }
+        if(armed){ connect(armed, node.id, idx); clearArmed(); }   // tap-to-connect target
+        else if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); } // tap connected input to detach
       }
     });
   });
 }
 
-// Wire dragging from an output port.
-let tempWire=null;
-function startWire(srcId, e){
+// Connecting works two ways, so it's easy on both mouse and touch:
+//   • Drag  — press an output dot and drag onto an input dot (desktop-friendly).
+//   • Tap   — tap an output dot to "arm" it, then tap any input dot (touch-friendly).
+let tempWire=null, armed=null;
+
+function setArmed(srcId){
+  clearArmed();
+  armed=srcId;
+  const p=NODES[srcId]&&NODES[srcId].el&&NODES[srcId].el.querySelector('.port.out');
+  if(p) p.classList.add('arming');
+  stage.classList.add('connecting');   // makes every input dot big + glowing (see CSS)
+  toast('Now tap the target block to connect — or tap the same dot again to cancel');
+}
+function clearArmed(){
+  if(armed && NODES[armed] && NODES[armed].el){
+    const p=NODES[armed].el.querySelector('.port.out'); if(p) p.classList.remove('arming');
+  }
+  armed=null; stage.classList.remove('connecting');
+}
+function startWireDrag(srcId, e){
   const from=outPortWorld(srcId);
+  const sx=e.clientX, sy=e.clientY; let moved=false;
   tempWire=document.createElementNS('http://www.w3.org/2000/svg','path');
-  tempWire.setAttribute('class','temp');
-  wiresSvg.appendChild(tempWire);
+  tempWire.setAttribute('class','temp'); wiresSvg.appendChild(tempWire);
+  tempWire.setAttribute('d',wirePath(from.x,from.y,from.x,from.y));
   function move(ev){
+    if(!moved && Math.hypot(ev.clientX-sx,ev.clientY-sy)>4) moved=true;
     const to=screenToWorld(ev.clientX,ev.clientY);
     tempWire.setAttribute('d',wirePath(from.x,from.y,to.x,to.y));
   }
@@ -1217,10 +1279,11 @@ function startWire(srcId, e){
     if(tempWire){ tempWire.remove(); tempWire=null; }
     const el=document.elementFromPoint(ev.clientX,ev.clientY);
     const port=el&&el.closest?el.closest('.port.in'):null;
-    if(port){ const dstId=port.dataset.id, idx=+port.dataset.idx; connect(srcId,dstId,idx); }
+    if(port){ connect(srcId, port.dataset.id, +port.dataset.idx); clearArmed(); }  // dropped on an input
+    else if(!moved){ armed===srcId ? clearArmed() : setArmed(srcId); }             // a tap → arm / toggle
+    // dragged into empty space → do nothing (leaves any existing armed state alone)
   }
   document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
-  move(e);
 }
 function connect(srcId,dstId,idx){
   if(srcId===dstId){ toast('A block can\'t feed itself.'); return; }
@@ -1349,15 +1412,52 @@ function makeSampleImage(){
 /* ------------------------------------------------------------------ */
 /*  Pan / zoom                                                         */
 /* ------------------------------------------------------------------ */
+// Pan (one finger / drag) and pinch-zoom (two fingers) on the empty canvas.
+const stagePointers=new Map();
+let panState=null, pinchState=null;
+function isBackground(t){ return t===stage || t===gridCanvas || t===world || (t&&t.id==='watermark'); }
 stage.addEventListener('pointerdown',e=>{
-  if(e.target!==stage && e.target!==gridCanvas && e.target!==world) return;
-  selectNode(null);
-  stage.classList.add('panning');
-  const sx=e.clientX, sy=e.clientY, ox=view.x, oy=view.y;
-  function move(ev){ view.x=ox+(ev.clientX-sx); view.y=oy+(ev.clientY-sy); applyView(); }
-  function up(){ stage.classList.remove('panning'); document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); }
-  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+  if(!isBackground(e.target)) return;
+  clearArmed(); selectNode(null);
+  try{ stage.setPointerCapture(e.pointerId); }catch(_){}
+  stagePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(stagePointers.size===1){ stage.classList.add('panning'); panState={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y}; pinchState=null; }
+  else if(stagePointers.size===2){ panState=null; beginPinch(); }
 });
+stage.addEventListener('pointermove',e=>{
+  if(!stagePointers.has(e.pointerId)) return;
+  stagePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(stagePointers.size>=2 && pinchState){ updatePinch(); }
+  else if(panState){ view.x=panState.vx+(e.clientX-panState.x); view.y=panState.vy+(e.clientY-panState.y); applyView(); }
+});
+function endStagePointer(e){
+  if(!stagePointers.has(e.pointerId)) return;
+  stagePointers.delete(e.pointerId);
+  try{ stage.releasePointerCapture(e.pointerId); }catch(_){}
+  pinchState=null;
+  if(stagePointers.size===1){ const p=[...stagePointers.values()][0]; panState={x:p.x,y:p.y,vx:view.x,vy:view.y}; }
+  else { panState=null; stage.classList.remove('panning'); }
+}
+stage.addEventListener('pointerup',endStagePointer);
+stage.addEventListener('pointercancel',endStagePointer);
+function beginPinch(){
+  const [a,b]=[...stagePointers.values()];
+  const r=stage.getBoundingClientRect(), mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+  pinchState={ dist:Math.hypot(a.x-b.x,a.y-b.y)||1, scale:view.scale,
+    wx:(mid.x-r.left-view.x)/view.scale, wy:(mid.y-r.top-view.y)/view.scale };
+}
+function updatePinch(){
+  const [a,b]=[...stagePointers.values()];
+  const r=stage.getBoundingClientRect(), mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+  const dist=Math.hypot(a.x-b.x,a.y-b.y)||1;
+  const scale=Math.max(0.3,Math.min(2.2,pinchState.scale*(dist/pinchState.dist)));
+  view.scale=scale;
+  view.x=(mid.x-r.left)-pinchState.wx*scale;
+  view.y=(mid.y-r.top)-pinchState.wy*scale;
+  applyView();
+}
+// Escape cancels an armed connection.
+window.addEventListener('keydown',e=>{ if(e.key==='Escape') clearArmed(); });
 stage.addEventListener('wheel',e=>{
   e.preventDefault();
   const r=stage.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
@@ -1448,7 +1548,7 @@ document.getElementById('helpClose').addEventListener('click',()=>{ document.get
 /* ------------------------------------------------------------------ */
 /*  Reset / init                                                       */
 /* ------------------------------------------------------------------ */
-function clearGraph(){ Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); }); NODES={}; selectedId=null; drawWires(); }
+function clearGraph(){ if(armed) clearArmed(); Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); }); NODES={}; selectedId=null; drawWires(); }
 function defaultGraph(){
   clearGraph();
   const src=addNode('source',40,150);
