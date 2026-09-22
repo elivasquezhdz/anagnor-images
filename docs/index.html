@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%236ea8fe'/%3E%3Ctext x='50' y='68' font-size='60' text-anchor='middle' fill='%230b1220' font-family='sans-serif' font-weight='700'%3Ea%3C/text%3E%3C/svg%3E">
+<title>anagnor — node image filters</title>
+<style>
+  :root{
+    --bg:#0f1115;
+    --panel:#181b22;
+    --panel-2:#20242e;
+    --panel-3:#262b36;
+    --border:#2b303b;
+    --border-2:#3a4150;
+    --text:#e7e9ee;
+    --muted:#9aa3b2;
+    --accent:#6ea8fe;
+    --accent-2:#7ee787;
+    --danger:#ff7b72;
+    --wire:#6ea8fe;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    line-height:1.5;
+    overflow:hidden;
+  }
+  /* ---- top bar ---- */
+  .topbar{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:10px 16px;border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#161a22,#12151b);
+    position:relative;z-index:5;
+  }
+  .brand{display:flex;flex-direction:column;line-height:1.1;margin-right:6px}
+  .brand h1{margin:0;font-size:1.15rem;letter-spacing:.5px}
+  .brand span{color:var(--muted);font-size:.72rem}
+  .palette{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .palette .sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}
+  .chip{
+    background:var(--panel-2);border:1px solid var(--border);color:var(--text);
+    padding:7px 11px;border-radius:999px;cursor:grab;font-size:.83rem;
+    display:inline-flex;align-items:center;gap:6px;user-select:none;transition:.12s;
+    white-space:nowrap;
+  }
+  .chip:hover{border-color:var(--accent);color:#fff}
+  .chip:active{cursor:grabbing}
+  .chip.act{background:var(--panel-3)}
+  .btn{
+    background:var(--accent);color:#0b1220;border:none;border-radius:9px;
+    padding:8px 13px;font-size:.83rem;font-weight:600;cursor:pointer;transition:.12s;white-space:nowrap;
+  }
+  .btn:hover{filter:brightness(1.08)}
+  .btn.ghost{background:var(--panel-2);color:var(--text);border:1px solid var(--border)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .spacer{flex:1 1 auto}
+  .zoomctl{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:.8rem}
+  .zoomctl button{
+    width:30px;height:30px;border-radius:8px;border:1px solid var(--border);
+    background:var(--panel-2);color:var(--text);cursor:pointer;font-size:1rem;line-height:1;
+  }
+  .zoomctl button:hover{border-color:var(--accent)}
+  #zoomVal{min-width:42px;text-align:center}
+
+  /* ---- editor canvas ---- */
+  #stage{
+    position:absolute;inset:0;top:0;
+    overflow:hidden;cursor:grab;touch-action:none;
+    background:
+      radial-gradient(1400px 700px at 50% -10%,#1b2130 0%,var(--bg) 60%);
+  }
+  #stage.panning{cursor:grabbing}
+  #grid{position:absolute;inset:0;pointer-events:none;opacity:.5}
+  #world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+  #wires{position:absolute;left:0;top:0;overflow:visible;width:10px;height:10px;pointer-events:none}
+  #wires path.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.85;pointer-events:stroke;cursor:pointer}
+  #wires path.wire:hover{stroke:var(--danger);opacity:1;stroke-width:3.2}
+  #wires path.temp{fill:none;stroke:var(--accent-2);stroke-width:2.4;stroke-dasharray:5 5;opacity:.9}
+
+  /* ---- node ---- */
+  .node{
+    position:absolute;width:238px;
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    box-shadow:0 8px 24px rgba(0,0,0,.35);
+    font-size:.85rem;user-select:none;
+  }
+  .node.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 10px 30px rgba(0,0,0,.5)}
+  .node .head{
+    display:flex;align-items:center;gap:7px;
+    padding:8px 10px;cursor:grab;border-bottom:1px solid var(--border);
+    border-radius:12px 12px 0 0;background:var(--panel-2);
+  }
+  .node.selected .head{background:var(--panel-3)}
+  .node .head .ico{font-size:1rem}
+  .node .head .ttl{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .head .x{
+    cursor:pointer;color:var(--muted);border:none;background:transparent;font-size:1rem;
+    padding:0 2px;line-height:1;border-radius:5px;
+  }
+  .node .head .x:hover{color:var(--danger)}
+  .node .body{padding:9px 10px}
+  .thumbwrap{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .thumb{
+    width:100%;max-height:180px;background:#0b0d12;border:1px solid var(--border);
+    border-radius:8px;object-fit:contain;display:block;
+  }
+  .node.preview .thumb{max-height:340px}
+  .thumbmeta{display:flex;justify-content:space-between;width:100%;align-items:center;gap:8px}
+  .thumbmeta .res{color:var(--muted);font-size:.72rem}
+  .dlbtn{
+    background:var(--accent-2);color:#0b1220;border:none;border-radius:7px;
+    padding:4px 9px;font-size:.74rem;font-weight:600;cursor:pointer;
+  }
+  .dlbtn:disabled{opacity:.4;cursor:not-allowed}
+  .node .err{color:var(--danger);font-size:.74rem;margin-top:6px;word-break:break-word}
+  .node .note{color:var(--muted);font-size:.74rem;margin-top:6px}
+
+  /* params (revealed when the node is selected) */
+  .params{display:none;margin-top:10px;border-top:1px dashed var(--border);padding-top:9px;
+    max-height:340px;overflow:auto;overscroll-behavior:contain}
+  .node.selected .params{display:block}
+  .p-row{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
+  .p-row label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;
+    display:flex;justify-content:space-between;gap:8px}
+  .p-row label .v{color:var(--accent-2);font-weight:600;text-transform:none;letter-spacing:0}
+  .p-row input[type=range]{width:100%;accent-color:var(--accent)}
+  .p-row select,.p-row input[type=number]{
+    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    border-radius:7px;padding:6px 8px;font-size:.82rem;width:100%;
+  }
+  .p-sub{font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;
+    font-weight:700;margin:4px 0 7px}
+  .p-toggle{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:.8rem;color:var(--text);text-transform:none}
+  .p-toggle input{width:16px;height:16px;accent-color:var(--accent)}
+  .filebtn{
+    display:inline-block;background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    border-radius:8px;padding:7px 11px;cursor:pointer;font-size:.8rem;font-weight:600;width:100%;text-align:center;
+  }
+  .filebtn:hover{border-color:var(--accent)}
+  .fname{color:var(--muted);font-size:.72rem;margin-top:6px;word-break:break-word;text-align:center}
+
+  /* ports */
+  .port{
+    position:absolute;width:14px;height:14px;border-radius:50%;
+    background:var(--panel-3);border:2px solid var(--border-2);cursor:crosshair;z-index:2;
+  }
+  .port:hover{border-color:var(--accent);background:var(--accent)}
+  .port.in{left:-8px}
+  .port.out{right:-8px;border-color:var(--accent);background:#2a4a7a}
+  .port.connected{background:var(--accent)}
+  .port .plabel{
+    position:absolute;font-size:.62rem;color:var(--muted);white-space:nowrap;top:-3px;pointer-events:none;
+  }
+  .port.in .plabel{left:18px}
+  .port.out .plabel{right:18px;text-align:right}
+
+  /* help + toast */
+  #help{
+    position:absolute;left:16px;bottom:14px;max-width:330px;z-index:4;
+    background:rgba(24,27,34,.92);border:1px solid var(--border);border-radius:12px;
+    padding:12px 14px;font-size:.78rem;color:var(--muted);backdrop-filter:blur(4px);
+  }
+  #help b{color:var(--text)}
+  #help .close{float:right;cursor:pointer;color:var(--muted);border:none;background:none;font-size:1rem}
+  #help kbd{background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:.72rem}
+  #ghost{position:fixed;z-index:50;pointer-events:none;opacity:.85;transform:translate(-50%,-50%)}
+  #toast{
+    position:absolute;left:50%;bottom:20px;transform:translateX(-50%);z-index:20;
+    background:var(--panel-3);border:1px solid var(--border-2);border-radius:10px;
+    padding:9px 15px;font-size:.82rem;color:var(--text);opacity:0;transition:opacity .2s;pointer-events:none;
+  }
+  #toast.show{opacity:1}
+  @media (max-width:640px){
+    .brand{margin-right:0}
+    #help{max-width:calc(100% - 32px)}
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><h1>anagnor</h1><span>node image filters</span></div>
+  <div class="palette" id="palette"><!-- filled by JS --></div>
+  <div class="spacer"></div>
+  <div class="zoomctl">
+    <button id="zoomOut" title="Zoom out">−</button>
+    <span id="zoomVal">100%</span>
+    <button id="zoomIn" title="Zoom in">+</button>
+    <button id="zoomFit" title="Reset view" style="width:auto;padding:0 10px;font-size:.8rem">Reset&nbsp;view</button>
+  </div>
+  <button class="btn ghost" id="resetGraph">Reset graph</button>
+</div>
+
+<div id="stage">
+  <canvas id="grid"></canvas>
+  <div id="world">
+    <svg id="wires"></svg>
+    <!-- nodes injected here -->
+  </div>
+  <div id="help">
+    <button class="close" id="helpClose" title="Dismiss">×</button>
+    <b>How it works.</b> Drag a block from the top bar onto the canvas (or click it).
+    Drag from a node's <b>right</b> dot to another node's <b>left</b> dot to connect them.
+    <b>Click a block</b> to reveal its parameters. Drag the empty canvas to pan; scroll to zoom.
+    Click a wire to remove it. Every block previews its own output — download from any one.
+  </div>
+  <div id="toast"></div>
+</div>
+<div id="ghost" class="chip act" hidden></div>
+
+<script>
+"use strict";
+/* ==================================================================
+   anagnor — a node-graph image filter playground.
+   Blocks are dragged onto the canvas and wired together; the output of
+   each block flows along the wires to the next. Clicking a block reveals
+   its parameters. Everything runs locally in the browser — images are
+   never uploaded anywhere.
+
+   The filter cores below are ported straight from the image-filters
+   project (github.com/elivasquezhdz/image-filters); the graph engine and
+   UI around them are new.
+   ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/*  Generic helpers                                                    */
+/* ------------------------------------------------------------------ */
+function loadImage(file){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>res(img);
+    img.onerror=rej;
+    img.src=URL.createObjectURL(file);
+  });
+}
+function newCanvas(w,h){ const c=document.createElement('canvas'); c.width=Math.max(1,w|0); c.height=Math.max(1,h|0); return c; }
+function cloneCanvas(src){ const c=newCanvas(src.width,src.height); c.getContext('2d').drawImage(src,0,0); return c; }
+function canvasData(c){ return c.getContext('2d').getImageData(0,0,c.width,c.height); }
+function dataToCanvas(id){ const c=newCanvas(id.width,id.height); c.getContext('2d').putImageData(id,0,0); return c; }
+function scaleToMax(canvas,maxSide){
+  const s=Math.min(1,maxSide/Math.max(canvas.width,canvas.height));
+  if(s>=1) return canvas;
+  const c=newCanvas(Math.round(canvas.width*s),Math.round(canvas.height*s));
+  c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);
+  return c;
+}
+function isIOS(){
+  const ua=navigator.userAgent||'';
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+}
+function canvasToPngBlob(canvas){
+  const dataURL=canvas.toDataURL('image/png');
+  const bin=atob(dataURL.slice(dataURL.indexOf(',')+1));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new Blob([bytes],{type:'image/png'});
+}
+function openImageInTab(blob){
+  const url=URL.createObjectURL(blob);
+  window.open(url,'_blank');
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+function shareImage(canvas,name){
+  let blob=null; try{ blob=canvasToPngBlob(canvas); }catch(_){}
+  if(blob && navigator.canShare){
+    let file=null; try{ file=new File([blob],name,{type:'image/png'}); }catch(_){}
+    let ok=false; try{ ok=!!file && navigator.canShare({files:[file]}); }catch(_){}
+    if(ok){ navigator.share({files:[file]}).catch(err=>{ if(err&&err.name==='AbortError')return; openImageInTab(blob); }); return; }
+  }
+  if(blob) openImageInTab(blob); else window.open(canvas.toDataURL('image/png'),'_blank');
+}
+function download(canvas,name){
+  if(!canvas) return;
+  if(isIOS()){ shareImage(canvas,name); return; }
+  const a=document.createElement('a');
+  a.download=name; a.href=canvas.toDataURL('image/png');
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ================================================================== */
+/*  4-Way Collage core (mirrors live_collage.py / the notebooks)       */
+/* ================================================================== */
+const CollageFx=(function(){
+  function createMosaic(img){
+    const w=img.width, h=img.height;
+    const c=newCanvas(w*2,h*2), ctx=c.getContext('2d');
+    ctx.drawImage(img,0,0);
+    ctx.save(); ctx.scale(-1,1);  ctx.drawImage(img,-2*w,0);    ctx.restore();
+    ctx.save(); ctx.scale(1,-1);  ctx.drawImage(img,0,-2*h);    ctx.restore();
+    ctx.save(); ctx.scale(-1,-1); ctx.drawImage(img,-2*w,-2*h); ctx.restore();
+    return c;
+  }
+  function getSlice(src,x,y,w,h){ const c=newCanvas(w,h); c.getContext('2d').drawImage(src,x,y,w,h,0,0,w,h); return c; }
+  function sliceAndReorder(canvas,sections,orientation){
+    const w=canvas.width, h=canvas.height, slices=[];
+    if(orientation==='v'){
+      const sw=Math.floor(w/sections);
+      for(let i=0;i<sections;i++){ const cw=i===sections-1? w-sw*i : sw; slices.push(getSlice(canvas,i*sw,0,cw,h)); }
+    }else{
+      const sh=Math.floor(h/sections);
+      for(let i=0;i<sections;i++){ const ch=i===sections-1? h-sh*i : sh; slices.push(getSlice(canvas,0,i*sh,w,ch)); }
+    }
+    const out=newCanvas(w,h), octx=out.getContext('2d');
+    for(let i=0;i<Math.floor(sections/2);i++){
+      const a=slices[i], b=slices[sections-1-i];
+      if(orientation==='v'){ octx.drawImage(a,a.width*(i*2),0); octx.drawImage(b,a.width*(2*i+1),0); }
+      else{ octx.drawImage(a,0,a.height*(i*2)); octx.drawImage(b,0,a.height*(2*i+1)); }
+    }
+    return out;
+  }
+  function renderCollage(src,sections){
+    sections=Math.max(2,sections|0);
+    const mosaic=createMosaic(src);
+    const vc=sliceAndReorder(mosaic,sections,'v');
+    return sliceAndReorder(vc,sections,'h');
+  }
+  return {renderCollage};
+})();
+
+/* ================================================================== */
+/*  Chroma Shift core                                                  */
+/* ================================================================== */
+const ChromaFx=(function(){
+  function shiftChannel(src,out,w,h,ch,dx,dy){
+    const s=src.data, o=out.data;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      const sx=x-dx, sy=y-dy, t=(y*w+x)*4+ch;
+      if(sx>=0&&sx<w&&sy>=0&&sy<h) o[t]=s[(sy*w+sx)*4+ch]; else o[t]=0;
+    }
+  }
+  function shift(baseData,w,h,a,b,axis,shiftPx,mode){
+    const out=new ImageData(new Uint8ClampedArray(baseData.data),w,h);
+    const signB=(mode==='same')?-1:1;
+    let dax=0,day=0,dbx=0,dby=0;
+    if(axis==='x'){ dax=-shiftPx; dbx=signB*shiftPx; } else { day=-shiftPx; dby=signB*shiftPx; }
+    shiftChannel(baseData,out,w,h,a,dax,day);
+    shiftChannel(baseData,out,w,h,b,dbx,dby);
+    return out;
+  }
+  return {shift};
+})();
+
+/* ================================================================== */
+/*  Horizontal / Vertical Fill core                                    */
+/* ================================================================== */
+const FillFx=(function(){
+  function fillDirection(srcData,w,h,direction,startPct,stopPct){
+    const out=new ImageData(new Uint8ClampedArray(srcData.data),w,h), d=out.data;
+    const idx=(x,y)=>(y*w+x)*4;
+    function copyCol(from,to){ for(let y=0;y<h;y++){ const s=idx(from,y),t=idx(to,y); d[t]=d[s];d[t+1]=d[s+1];d[t+2]=d[s+2];d[t+3]=d[s+3]; } }
+    function copyRow(from,to){ for(let x=0;x<w;x++){ const s=idx(x,from),t=idx(x,to); d[t]=d[s];d[t+1]=d[s+1];d[t+2]=d[s+2];d[t+3]=d[s+3]; } }
+    if(stopPct===undefined){
+      const percent=Math.max(0,Math.min(1,startPct));
+      if(direction==='left'){ const fw=Math.floor(w*percent), src=Math.min(fw,w-1); for(let x=0;x<fw;x++) copyCol(src,x); }
+      else if(direction==='right'){ const fw=Math.floor(w*percent), src=Math.max(w-fw-1,0); for(let x=w-fw;x<w;x++) copyCol(src,x); }
+      else if(direction==='up'){ const fh=Math.floor(h*percent), src=Math.min(fh,h-1); for(let y=0;y<fh;y++) copyRow(src,y); }
+      else if(direction==='down'){ const fh=Math.floor(h*percent), src=Math.max(h-fh-1,0); for(let y=h-fh;y<h;y++) copyRow(src,y); }
+      return out;
+    }
+    let a=Math.max(0,Math.min(1,startPct)), b=Math.max(0,Math.min(1,stopPct));
+    if(a>b){ const t=a; a=b; b=t; }
+    if(direction==='left'||direction==='right'){
+      const x0=Math.max(0,Math.min(w,Math.floor(w*a))), x1=Math.max(0,Math.min(w,Math.floor(w*b)));
+      if(x1>x0){ const src=direction==='left'?Math.min(x1,w-1):Math.max(x0,0); for(let x=x0;x<x1;x++) copyCol(src,x); }
+    }else if(direction==='up'||direction==='down'){
+      const y0=Math.max(0,Math.min(h,Math.floor(h*a))), y1=Math.max(0,Math.min(h,Math.floor(h*b)));
+      if(y1>y0){ const src=direction==='up'?Math.min(y1,h-1):Math.max(y0,0); for(let y=y0;y<y1;y++) copyRow(src,y); }
+    }
+    return out;
+  }
+  function fillDiagonal(srcData,w,h,xPct,yPct,slope){
+    const out=new ImageData(new Uint8ClampedArray(srcData.data),w,h);
+    const s=srcData.data, d=out.data;
+    const ax=w*xPct, ay=h*yPct;
+    let ux=1, uy=slope; const len=Math.hypot(ux,uy)||1; ux/=len; uy/=len;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      const t=(x-ax)*ux+(y-ay)*uy;
+      if(t>0){
+        let fx=Math.round(x-t*ux), fy=Math.round(y-t*uy);
+        if(fx<0)fx=0; else if(fx>w-1)fx=w-1;
+        if(fy<0)fy=0; else if(fy>h-1)fy=h-1;
+        const si=(fy*w+fx)*4, ti=(y*w+x)*4;
+        d[ti]=s[si]; d[ti+1]=s[si+1]; d[ti+2]=s[si+2]; d[ti+3]=s[si+3];
+      }
+    }
+    return out;
+  }
+  function fillRect(srcData,w,h,direction,startX,startY,stopX,stopY){
+    const out=new ImageData(new Uint8ClampedArray(srcData.data),w,h);
+    const s=srcData.data, d=out.data;
+    const cx=v=>v<0?0:(v>w?w:v), cy=v=>v<0?0:(v>h?h:v), f=v=>Math.max(0,Math.min(1,v));
+    let x0=cx(Math.floor(w*f(startX))), x1=cx(Math.floor(w*f(stopX)));
+    let y0=cy(Math.floor(h*f(startY))), y1=cy(Math.floor(h*f(stopY)));
+    if(x0>x1){ const t=x0; x0=x1; x1=t; } if(y0>y1){ const t=y0; y0=y1; y1=t; }
+    if(x1<=x0 || y1<=y0) return out;
+    if(direction==='left'||direction==='right'){
+      const srcX=direction==='right'?x0:Math.min(x1,w-1);
+      for(let y=y0;y<y1;y++){ const sb=(y*w+srcX)*4, r=s[sb],g=s[sb+1],b=s[sb+2],a=s[sb+3];
+        for(let x=x0;x<x1;x++){ const t=(y*w+x)*4; d[t]=r;d[t+1]=g;d[t+2]=b;d[t+3]=a; } }
+    }else{
+      const srcY=direction==='down'?y0:Math.min(y1,h-1);
+      for(let x=x0;x<x1;x++){ const sb=(srcY*w+x)*4, r=s[sb],g=s[sb+1],b=s[sb+2],a=s[sb+3];
+        for(let y=y0;y<y1;y++){ const t=(y*w+x)*4; d[t]=r;d[t+1]=g;d[t+2]=b;d[t+3]=a; } }
+    }
+    return out;
+  }
+  function apply(srcData,w,h,p){
+    if(p.diagonal) return fillDiagonal(srcData,w,h,p.dx,p.dy,p.slope);
+    if(p.combined){ let r=fillDirection(srcData,w,h,p.hDir,p.hStart); return fillDirection(r,w,h,p.vDir,p.vStart); }
+    return fillRect(srcData,w,h,p.dir,p.startX,p.startY,p.stopX,p.stopY);
+  }
+  return {fillDirection, fillDiagonal, fillRect, apply};
+})();
+
+/* ================================================================== */
+/*  Vampire core (browser port of vampire_filter.py)                   */
+/* ================================================================== */
+const VampireFx=(function(){
+  const LR=0.2126, LG=0.7152, LB=0.0722;
+  function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+  function makeGaussian(rand){ let spare=null; return function(){ if(spare!==null){ const s=spare; spare=null; return s; } let u,v,s; do{ u=rand()*2-1; v=rand()*2-1; s=u*u+v*v; }while(s>=1||s===0); const m=Math.sqrt(-2*Math.log(s)/s); spare=v*m; return u*m; }; }
+  function ss(x){ if(x<0)x=0; else if(x>1)x=1; return x*x*(3-2*x); }
+  function lumaPlane(img,n){ const L=new Float32Array(n); for(let i=0,j=0;i<n;i++,j+=3) L[i]=LR*img[j]+LG*img[j+1]+LB*img[j+2]; return L; }
+  function boxBlurPlane(src,w,h,r){
+    if(r<1) return src.slice(0);
+    const win=2*r+1, tmp=new Float32Array(w*h), out=new Float32Array(w*h);
+    for(let y=0;y<h;y++){ const row=y*w; let sum=0;
+      for(let k=-r;k<=r;k++){ const xx=k<0?0:(k>=w?w-1:k); sum+=src[row+xx]; }
+      for(let x=0;x<w;x++){ tmp[row+x]=sum/win; const xo=x-r<0?0:x-r, xi=x+r+1>=w?w-1:x+r+1; sum+=src[row+xi]-src[row+xo]; } }
+    for(let x=0;x<w;x++){ let sum=0;
+      for(let k=-r;k<=r;k++){ const yy=k<0?0:(k>=h?h-1:k); sum+=tmp[yy*w+x]; }
+      for(let y=0;y<h;y++){ out[y*w+x]=sum/win; const yo=y-r<0?0:y-r, yi=y+r+1>=h?h-1:y+r+1; sum+=tmp[yi*w+x]-tmp[yo*w+x]; } }
+    return out;
+  }
+  function gaussianBlurPlane(src,w,h,radius){ if(radius<=0.5) return src.slice(0); const r=Math.max(1,Math.round(radius/3)); let out=src; for(let i=0;i<3;i++) out=boxBlurPlane(out,w,h,r); return out; }
+  function bilinearResize(src,sw,sh,dw,dh){
+    const out=new Float32Array(dw*dh), sxr=dw>1?(sw-1)/(dw-1):0, syr=dh>1?(sh-1)/(dh-1):0;
+    for(let y=0;y<dh;y++){ const fy=y*syr; let y0=fy|0; let y1=y0+1>=sh?sh-1:y0+1; const wy=fy-y0;
+      for(let x=0;x<dw;x++){ const fx=x*sxr; let x0=fx|0; let x1=x0+1>=sw?sw-1:x0+1; const wx=fx-x0;
+        const a=src[y0*sw+x0],b=src[y0*sw+x1],c=src[y1*sw+x0],d=src[y1*sw+x1];
+        out[y*dw+x]=a*(1-wx)*(1-wy)+b*wx*(1-wy)+c*(1-wx)*wy+d*wx*wy; } }
+    return out;
+  }
+  function hslToRgb(hDeg,s,l){
+    let h=(((hDeg%360)+360)%360)/60;
+    const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs(h%2-1)), m=l-c/2; let r,g,b; const hi=Math.floor(h)%6;
+    if(hi===0){r=c;g=x;b=0;} else if(hi===1){r=x;g=c;b=0;} else if(hi===2){r=0;g=c;b=x;}
+    else if(hi===3){r=0;g=x;b=c;} else if(hi===4){r=x;g=0;b=c;} else {r=c;g=0;b=x;}
+    return [r+m,g+m,b+m];
+  }
+  function monotoneCurveLut(points,size){
+    size=size||1024;
+    const pts=points.slice().sort((a,b)=>a[0]-b[0]), n=pts.length;
+    const x=new Float64Array(n), y=new Float64Array(n);
+    for(let i=0;i<n;i++){ x[i]=pts[i][0]/255; y[i]=pts[i][1]/255; }
+    const delta=new Float64Array(n-1); for(let i=0;i<n-1;i++) delta[i]=(y[i+1]-y[i])/(x[i+1]-x[i]);
+    const m=new Float64Array(n); for(let i=1;i<n-1;i++) m[i]=(delta[i-1]+delta[i])/2; m[0]=delta[0]; m[n-1]=delta[n-2];
+    for(let i=0;i<n-1;i++){ if(delta[i]===0){ m[i]=0; m[i+1]=0; } else { const a=m[i]/delta[i], b=m[i+1]/delta[i], t=a*a+b*b; if(t>9){ const sf=3/Math.sqrt(t); m[i]=sf*a*delta[i]; m[i+1]=sf*b*delta[i]; } } }
+    const lut=new Float32Array(size);
+    for(let k=0;k<size;k++){ const xs=k/(size-1); let lo=0,hi=n; while(lo<hi){ const mid=(lo+hi)>>1; if(x[mid]<xs) lo=mid+1; else hi=mid; }
+      let idx=lo-1; if(idx<0)idx=0; else if(idx>n-2)idx=n-2;
+      const dx=x[idx+1]-x[idx], t=(xs-x[idx])/dx, t2=t*t, t3=t2*t;
+      let v=(2*t3-3*t2+1)*y[idx]+(t3-2*t2+t)*dx*m[idx]+(-2*t3+3*t2)*y[idx+1]+(t3-t2)*dx*m[idx+1];
+      lut[k]=v<0?0:(v>1?1:v); }
+    return lut;
+  }
+  function clip01(img,n3){ for(let j=0;j<n3;j++){ const v=img[j]; if(v<0)img[j]=0; else if(v>1)img[j]=1; } }
+  function exposure(img,n3,ev){ const f=Math.pow(2,ev); for(let j=0;j<n3;j++) img[j]*=f; }
+  function toneRegions(img,n,hi,sh,wh,bl){
+    const H=hi/100*0.45, S=sh/100*0.35, W=wh/100*0.30, B=bl/100*0.25;
+    for(let i=0,j=0;i<n;i++,j+=3){ const L=LR*img[j]+LG*img[j+1]+LB*img[j+2];
+      const d=ss((L-0.45)/0.55)*H+ss((0.55-L)/0.55)*S+ss((L-0.65)/0.35)*W+ss((0.35-L)/0.35)*B;
+      img[j]+=d; img[j+1]+=d; img[j+2]+=d; }
+  }
+  function contrast(img,n3,amount){ if(amount===0) return; const a=amount/100, f=a>0?1+0.6*a:1+0.9*a; for(let j=0;j<n3;j++) img[j]=(img[j]-0.5)*f+0.5; }
+  function whiteBalance(img,n,n3,temp,tint){
+    const t=temp/100, g=tint/100, gr=1+0.22*t, gg=1-0.16*g, gb=1-0.22*t;
+    let before=0; for(let i=0,j=0;i<n;i++,j+=3) before+=LR*img[j]+LG*img[j+1]+LB*img[j+2];
+    let after=0; for(let i=0,j=0;i<n;i++,j+=3){ const r=img[j]*gr, gv=img[j+1]*gg, b=img[j+2]*gb; img[j]=r; img[j+1]=gv; img[j+2]=b; after+=LR*r+LG*gv+LB*b; }
+    const ratio=(before/n)/Math.max(after/n,1e-6); for(let j=0;j<n3;j++) img[j]*=ratio;
+  }
+  function dehaze(img,n,amount){
+    if(amount===0) return; const a=amount/100, BINS=1024, hist=new Int32Array(BINS);
+    for(let i=0,j=0;i<n;i++,j+=3){ let mn=img[j]; if(img[j+1]<mn)mn=img[j+1]; if(img[j+2]<mn)mn=img[j+2]; let b=(mn*BINS)|0; if(b<0)b=0; else if(b>=BINS)b=BINS-1; hist[b]++; }
+    const target=n*0.05; let cum=0, veil=0; for(let b=0;b<BINS;b++){ cum+=hist[b]; if(cum>=target){ veil=(b+0.5)/BINS; break; } }
+    const av=a*veil, denom=Math.max(1-av,1e-3), f=1+0.3*a;
+    for(let i=0,j=0;i<n;i++,j+=3){ const r=(img[j]-av)/denom, gv=(img[j+1]-av)/denom, b=(img[j+2]-av)/denom; const L=LR*r+LG*gv+LB*b; img[j]=L+(r-L)*f; img[j+1]=L+(gv-L)*f; img[j+2]=L+(b-L)*f; }
+  }
+  function localContrast(img,n,w,h,texture,clarity){
+    if(texture===0 && clarity===0) return; const base=Math.max(w,h)/1000, L=lumaPlane(img,n);
+    if(texture!==0){ const blur=gaussianBlurPlane(L,w,h,Math.max(1.5,2.5*base)), k=texture/100*1.2; for(let i=0,j=0;i<n;i++,j+=3){ const d=(L[i]-blur[i])*k; img[j]+=d; img[j+1]+=d; img[j+2]+=d; } }
+    if(clarity!==0){ const blur=gaussianBlurPlane(L,w,h,Math.max(6,30*base)), k=clarity/100*1.5; for(let i=0,j=0;i<n;i++,j+=3){ let Lc=L[i]; if(Lc<0)Lc=0; else if(Lc>1)Lc=1; const a=2*Lc-1, mask=1-a*a; const d=(L[i]-blur[i])*mask*k; img[j]+=d; img[j+1]+=d; img[j+2]+=d; } }
+  }
+  function vibranceSaturation(img,n,vibrance,sat){
+    const hasV=vibrance!==0, hasS=sat!==0; if(!hasV && !hasS) return; const v=vibrance/100, s=sat/100, satMul=1+0.85*s;
+    for(let i=0,j=0;i<n;i++,j+=3){ const r=img[j],g=img[j+1],b=img[j+2], L=LR*r+LG*g+LB*b; let mx=r; if(g>mx)mx=g; if(b>mx)mx=b; let mn=r; if(g<mn)mn=g; if(b<mn)mn=b; let cur=mx-mn; if(cur<0)cur=0; else if(cur>1)cur=1; let f=1; if(hasV){ const c=1-cur; f+=v*0.9*c*c; } if(hasS) f*=satMul; img[j]=L+(r-L)*f; img[j+1]=L+(g-L)*f; img[j+2]=L+(b-L)*f; }
+  }
+  function colorGrading(img,n,p){
+    const blend=p.grade_blending/100;
+    const zones=[['shadows',p.grade_shadows,false],['midtones',p.grade_midtones,false],['highlights',p.grade_highlights,false],['global',p.grade_global,true]];
+    const active=[];
+    for(const [name,vals,glob] of zones){ const hue=vals[0], sat=vals[1], lum=vals[2]; if(sat===0 && lum===0) continue; const col=hslToRgb(hue,1,0.5), mean=(col[0]+col[1]+col[2])/3, sc=(sat/100)*0.28*blend; active.push({name,glob,tint:[(col[0]-mean)*sc,(col[1]-mean)*sc,(col[2]-mean)*sc],lum:lum/100*0.2}); }
+    if(!active.length) return;
+    for(let i=0,j=0;i<n;i++,j+=3){ let L=LR*img[j]+LG*img[j+1]+LB*img[j+2]; if(L<0)L=0; else if(L>1)L=1; let dr=0,dg=0,db=0;
+      for(const z of active){ let mask; if(z.name==='shadows') mask=Math.pow(ss((0.5-L)/0.5),1.5); else if(z.name==='midtones') mask=1-Math.pow(Math.abs(2*L-1),1.5); else if(z.name==='highlights') mask=Math.pow(ss((L-0.5)/0.5),1.5); else mask=1; const wgt=mask*(z.glob?0.6:1); dr+=wgt*z.tint[0]; dg+=wgt*z.tint[1]; db+=wgt*z.tint[2]; if(z.lum!==0){ const lv=wgt*z.lum; dr+=lv; dg+=lv; db+=lv; } }
+      img[j]+=dr; img[j+1]+=dg; img[j+2]+=db; }
+  }
+  function colorNoiseReduction(img,n,w,h,p){
+    if(p.color_noise<=0) return; const L=lumaPlane(img,n);
+    const cr=new Float32Array(n), cg=new Float32Array(n), cb=new Float32Array(n);
+    for(let i=0,j=0;i<n;i++,j+=3){ cr[i]=img[j]-L[i]; cg[i]=img[j+1]-L[i]; cb[i]=img[j+2]-L[i]; }
+    let radius=(1+(p.color_noise/100)*6)*(0.5+p.color_noise_smooth/100);
+    const br=gaussianBlurPlane(cr,w,h,radius), bg=gaussianBlurPlane(cg,w,h,radius), bb=gaussianBlurPlane(cb,w,h,radius);
+    const keep=(p.color_noise_detail/100)*0.3, km=1-keep;
+    for(let i=0,j=0;i<n;i++,j+=3){ img[j]=L[i]+br[i]*km+cr[i]*keep; img[j+1]=L[i]+bg[i]*km+cg[i]*keep; img[j+2]=L[i]+bb[i]*km+cb[i]*keep; }
+  }
+  function vignette(img,w,h,p){
+    if(p.vignette===0) return; const r=p.vignette_roundness/100, ar=w/h;
+    const sx=ar>=1?1/(1+r*(ar-1)):1, sy=ar<1?1/(1+r*(1/ar-1)):1;
+    const mid=Math.min(Math.max(p.vignette_midpoint/100,0.05),1), feather=Math.max(p.vignette_feather/100,0.05), amount=p.vignette/100;
+    for(let y=0;y<h;y++){ const yy=(h>1?(-1+2*y/(h-1)):0)*sy; for(let x=0;x<w;x++){ const xx=(w>1?(-1+2*x/(w-1)):0)*sx; const t=ss((Math.sqrt(xx*xx+yy*yy)-mid)/feather); const f=amount<0?1+amount*t:1+amount*t*0.8; const j=(y*w+x)*3; img[j]*=f; img[j+1]*=f; img[j+2]*=f; } }
+  }
+  function grain(img,n,w,h,p,seed){
+    if(p.grain<=0) return; const rand=mulberry32((seed==null?123456789:seed)>>>0), gauss=makeGaussian(rand);
+    const size=1+(p.grain_size/100)*4, nh=Math.max(2,Math.floor(h/size)), nw=Math.max(2,Math.floor(w/size));
+    const small=new Float32Array(nw*nh); for(let i=0;i<small.length;i++) small[i]=gauss();
+    let noise=bilinearResize(small,nw,nh,w,h); const rough=p.grain_roughness/100;
+    if(rough>0){ const lh=Math.max(2,Math.floor(nh/6)), lw=Math.max(2,Math.floor(nw/6)); const low=new Float32Array(lw*lh); for(let i=0;i<low.length;i++) low[i]=gauss(); const lowUp=bilinearResize(low,lw,lh,w,h); for(let i=0;i<noise.length;i++) noise[i]*=(1+rough*0.8*lowUp[i]); }
+    const amount=(p.grain/100)*0.12;
+    for(let i=0,j=0;i<n;i++,j+=3){ let L=LR*img[j]+LG*img[j+1]+LB*img[j+2]; if(L<0)L=0; else if(L>1)L=1; const d=noise[i]*amount*Math.sqrt(1-Math.abs(2*L-1)); img[j]+=d; img[j+1]+=d; img[j+2]+=d; }
+  }
+  function applyLutInPlace(img,n3,lut){ const last=lut.length-1; for(let j=0;j<n3;j++){ let v=img[j]; if(v<0)v=0; else if(v>1)v=1; const xf=v*last; let i0=xf|0; if(i0>last)i0=last; let i1=i0+1>last?last:i0+1; const f=xf-i0; img[j]=lut[i0]*(1-f)+lut[i1]*f; } }
+  function process(img0,w,h,p){
+    const n=w*h, n3=n*3, img=img0.slice(0), original=p.strength<1?img0:null;
+    exposure(img,n3,p.exposure); toneRegions(img,n,p.highlights,p.shadows,p.whites,p.blacks); contrast(img,n3,p.contrast); clip01(img,n3);
+    whiteBalance(img,n,n3,p.temp,p.tint); clip01(img,n3); dehaze(img,n,p.dehaze); localContrast(img,n,w,h,p.texture,p.clarity); clip01(img,n3);
+    applyLutInPlace(img,n3,monotoneCurveLut(p.curve,1024)); vibranceSaturation(img,n,p.vibrance,p.saturation); clip01(img,n3);
+    colorGrading(img,n,p); clip01(img,n3); colorNoiseReduction(img,n,w,h,p);
+    if(p.vignetteOn) vignette(img,w,h,p); if(p.grainOn) grain(img,n,w,h,p,p.seed); clip01(img,n3);
+    if(original){ const s=p.strength, is=1-s; for(let j=0;j<n3;j++) img[j]=original[j]*is+img[j]*s; clip01(img,n3); }
+    return img;
+  }
+  function toRgb(id){ const d=id.data, n=id.width*id.height, img=new Float32Array(n*3); for(let i=0,j=0,k=0;i<n;i++,j+=4,k+=3){ img[k]=d[j]/255; img[k+1]=d[j+1]/255; img[k+2]=d[j+2]/255; } return img; }
+  function toImageData(img,w,h,src){ const id=new ImageData(w,h), d=id.data, sd=src?src.data:null, n=w*h; for(let i=0,j=0,k=0;i<n;i++,j+=4,k+=3){ d[j]=img[k]*255; d[j+1]=img[k+1]*255; d[j+2]=img[k+2]*255; d[j+3]=sd?sd[j+3]:255; } return id; }
+  function defaultPreset(){
+    return { exposure:-0.79, contrast:53, highlights:-100, shadows:-27, whites:-100, blacks:-55,
+      temp:100, tint:-10, vibrance:24, saturation:100, texture:-10, clarity:15, dehaze:10,
+      vignette:-45, vignette_midpoint:64, vignette_roundness:15, vignette_feather:50,
+      grain:48, grain_size:34, grain_roughness:46, color_noise:21, color_noise_detail:50, color_noise_smooth:50,
+      curve:[[0,0],[74,85],[184,135],[255,230]],
+      grade_shadows:[0,0,0], grade_midtones:[35,80,0], grade_highlights:[8,85,0], grade_global:[5,85,0],
+      grade_blending:50, strength:1, grainOn:true, vignetteOn:true, seed:12345 };
+  }
+  const GROUPS=[
+    {title:'Light',items:[
+      {key:'exposure',label:'Exposure',min:-2,max:2,step:0.01,dp:2},
+      {key:'contrast',label:'Contrast',min:-100,max:100,step:1},
+      {key:'highlights',label:'Highlights',min:-100,max:100,step:1},
+      {key:'shadows',label:'Shadows',min:-100,max:100,step:1},
+      {key:'whites',label:'Whites',min:-100,max:100,step:1},
+      {key:'blacks',label:'Blacks',min:-100,max:100,step:1} ]},
+    {title:'Color',items:[
+      {key:'temp',label:'Temp',min:-100,max:100,step:1},
+      {key:'tint',label:'Tint',min:-100,max:100,step:1},
+      {key:'vibrance',label:'Vibrance',min:-100,max:100,step:1},
+      {key:'saturation',label:'Saturation',min:-100,max:100,step:1} ]},
+    {title:'Effects',items:[
+      {key:'texture',label:'Texture',min:-100,max:100,step:1},
+      {key:'clarity',label:'Clarity',min:-100,max:100,step:1},
+      {key:'dehaze',label:'Dehaze',min:-100,max:100,step:1} ]},
+    {title:'Vignette',items:[
+      {key:'vignette',label:'Amount',min:-100,max:100,step:1},
+      {key:'vignette_midpoint',label:'Midpoint',min:0,max:100,step:1},
+      {key:'vignette_roundness',label:'Roundness',min:-100,max:100,step:1},
+      {key:'vignette_feather',label:'Feather',min:0,max:100,step:1} ]},
+    {title:'Grain',items:[
+      {key:'grain',label:'Amount',min:0,max:100,step:1},
+      {key:'grain_size',label:'Size',min:0,max:100,step:1},
+      {key:'grain_roughness',label:'Roughness',min:0,max:100,step:1} ]},
+    {title:'Overall',items:[
+      {key:'strength',label:'Strength',min:0,max:100,step:1,suffix:'%',scale:0.01} ]},
+  ];
+  return {process, toRgb, toImageData, defaultPreset, GROUPS};
+})();
+
+/* ================================================================== */
+/*  Boxes core (N×N interleave, or fixed block size)                   */
+/* ================================================================== */
+const BoxesFx=(function(){
+  function commonSize(canvases,fit){
+    if(fit==='min') return [Math.min(...canvases.map(c=>c.width)), Math.min(...canvases.map(c=>c.height))];
+    return [canvases[0].width, canvases[0].height];
+  }
+  function byDivisions(canvases,W,H,N){
+    N=Math.max(2,Math.min(N,W,H));
+    const out=newCanvas(W,H), ctx=out.getContext('2d');
+    const gridH=Math.floor(H/N), gridW=Math.floor(W/N), num=canvases.length; let sel=0;
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+      const top=i*gridH, left=j*gridW, bottom=(i<N-1)?(i+1)*gridH:H, right=(j<N-1)?(j+1)*gridW:W, cw=right-left, ch=bottom-top;
+      ctx.drawImage(canvases[sel%num], left,top,cw,ch, left,top,cw,ch); sel++;
+    }
+    return out;
+  }
+  function byBlockSize(canvases,W,H,blockW,blockH){
+    blockW=Math.max(1,Math.min(W,blockW|0)); blockH=Math.max(1,Math.min(H,blockH|0));
+    const out=newCanvas(W,H), ctx=out.getContext('2d');
+    const cols=Math.ceil(W/blockW), rows=Math.ceil(H/blockH), num=canvases.length; let sel=0;
+    for(let i=0;i<rows;i++) for(let j=0;j<cols;j++){
+      const left=j*blockW, top=i*blockH, cw=Math.min(blockW,W-left), ch=Math.min(blockH,H-top);
+      ctx.drawImage(canvases[sel%num], left,top,cw,ch, left,top,cw,ch); sel++;
+    }
+    return out;
+  }
+  function run(canvases,p){
+    if(canvases.length<2) return canvases[0]||null;
+    let order=canvases.slice(); if(p.order==='reverse') order.reverse();
+    const [W,H]=commonSize(order,p.fit);
+    const srcs=order.map(c=>{ const t=newCanvas(W,H); t.getContext('2d').drawImage(c,0,0,W,H); return t; });
+    if(p.mode==='blocksize'){
+      let bw,bh;
+      if(p.unit==='pct'){ bw=Math.round(W*(+p.blockW)/100); bh=Math.round(H*(+p.blockH)/100); }
+      else { bw=Math.round(+p.blockW); bh=Math.round(+p.blockH); }
+      return byBlockSize(srcs,W,H,bw,bh);
+    }
+    return byDivisions(srcs,W,H,+p.N|0);
+  }
+  return {run};
+})();
+
+/* ================================================================== */
+/*  Channel Merge core (each input → one colour layer, added)          */
+/* ================================================================== */
+const ChannelFx=(function(){
+  const COLORS=[[1,0,0],[0,1,0],[0,0,1],[0,1,1],[1,1,0],[1,0,1]]; // R G B C Y M
+  const NAMES=['Red','Green','Blue','Cyan','Yellow','Magenta'];
+  const CSS=['#ff5b5b','#5bff5b','#6e8bff','#37d5d5','#e6e64b','#ff6bff'];
+  function merge(inputs,strengths,fit){
+    const present=inputs.map((c,i)=>({c,i})).filter(o=>o.c);
+    if(!present.length) return null;
+    let W,H;
+    if(fit==='min'){ W=Math.min(...present.map(o=>o.c.width)); H=Math.min(...present.map(o=>o.c.height)); }
+    else { W=present[0].c.width; H=present[0].c.height; }
+    W=Math.max(1,W|0); H=Math.max(1,H|0);
+    const acc=new Float32Array(W*H*3), tmp=newCanvas(W,H), tctx=tmp.getContext('2d');
+    for(const {c,i} of present){
+      tctx.clearRect(0,0,W,H); tctx.drawImage(c,0,0,W,H);
+      const d=tctx.getImageData(0,0,W,H).data, w=(strengths[i]||0)/100;
+      const cr=COLORS[i][0]*w, cg=COLORS[i][1]*w, cb=COLORS[i][2]*w;
+      for(let k=0,p=0;k<W*H;k++,p+=4){ const g=0.2126*d[p]+0.7152*d[p+1]+0.0722*d[p+2], q=k*3; acc[q]+=g*cr; acc[q+1]+=g*cg; acc[q+2]+=g*cb; }
+    }
+    const id=new ImageData(W,H), od=id.data;
+    for(let k=0,p=0;k<W*H;k++,p+=4){ const q=k*3; od[p]=acc[q]; od[p+1]=acc[q+1]; od[p+2]=acc[q+2]; od[p+3]=255; }
+    return dataToCanvas(id);
+  }
+  return {merge, COLORS, NAMES, CSS};
+})();
+
+/* ================================================================== */
+/*  Foreground / Background (MediaPipe Selfie Segmentation)            */
+/*  Formerly "Person / Background". foreground = the detected person.  */
+/* ================================================================== */
+const FgBgFx=(function(){
+  const VENDOR='vendor/selfie/', MAX_DIM=1600;
+  let seg=null, loading=null, queue=Promise.resolve();
+  let pendingResolve=null, pendingReject=null, curW=0, curH=0, curMask=null;
+
+  function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=()=>rej(new Error('failed to load '+src)); document.head.appendChild(s); }); }
+  function ensureModel(){
+    if(seg) return Promise.resolve(seg);
+    if(loading) return loading;
+    loading=(async()=>{
+      if(typeof SelfieSegmentation==='undefined') await loadScript(VENDOR+'selfie_segmentation.js');
+      const s=new SelfieSegmentation({locateFile:f=>VENDOR+f});
+      s.setOptions({modelSelection:0});
+      s.onResults(onResults);
+      await s.initialize();
+      seg=s; return s;
+    })();
+    return loading;
+  }
+  function onResults(results){
+    const tmp=newCanvas(curW,curH), tctx=tmp.getContext('2d');
+    tctx.drawImage(results.segmentationMask,0,0,curW,curH);
+    const md=tctx.getImageData(0,0,curW,curH).data, mask=new Float32Array(curW*curH);
+    for(let i=0,p=0;i<curW*curH;i++,p+=4) mask[i]=md[p]/255;
+    curMask=mask;
+    if(pendingResolve){ const r=pendingResolve; pendingResolve=null; pendingReject=null; r(mask); }
+  }
+  // Serialize segmentations (MediaPipe uses a single results callback).
+  function segment(canvas){
+    const run=()=>_one(canvas);
+    const p=queue.then(run,run);
+    queue=p.catch(()=>{});
+    return p;
+  }
+  function _one(canvas){
+    return ensureModel().then(s=> new Promise((resolve,reject)=>{
+      curW=canvas.width; curH=canvas.height; pendingResolve=resolve; pendingReject=reject;
+      Promise.resolve(s.send({image:canvas})).catch(reject);
+    }));
+  }
+
+  /* ---- mask refinement ---- */
+  function boxBlur(src,w,h,r){
+    if(r<1) return src.slice(0);
+    const win=2*r+1, tmp=new Float32Array(w*h), out=new Float32Array(w*h);
+    for(let y=0;y<h;y++){ const row=y*w; let sum=0; for(let k=-r;k<=r;k++){ const xx=k<0?0:(k>=w?w-1:k); sum+=src[row+xx]; }
+      for(let x=0;x<w;x++){ tmp[row+x]=sum/win; const xo=x-r<0?0:x-r, xi=x+r+1>=w?w-1:x+r+1; sum+=src[row+xi]-src[row+xo]; } }
+    for(let x=0;x<w;x++){ let sum=0; for(let k=-r;k<=r;k++){ const yy=k<0?0:(k>=h?h-1:k); sum+=tmp[yy*w+x]; }
+      for(let y=0;y<h;y++){ out[y*w+x]=sum/win; const yo=y-r<0?0:y-r, yi=y+r+1>=h?h-1:y+r+1; sum+=tmp[yi*w+x]-tmp[yo*w+x]; } }
+    return out;
+  }
+  function lineMinMax(a,out,start,stride,n,r,isMax,dq,vals){
+    for(let i=0;i<n;i++) vals[i]=a[start+i*stride];
+    let head=0,tail=0,added=0;
+    for(let i=0;i<n;i++){ const hi=i+r<n-1?i+r:n-1; while(added<=hi){ const v=vals[added]; while(tail>head && (isMax? v>=vals[dq[tail-1]] : v<=vals[dq[tail-1]])) tail--; dq[tail++]=added; added++; } const lo=i-r>0?i-r:0; while(dq[head]<lo) head++; out[start+i*stride]=vals[dq[head]]; }
+  }
+  function morph(src,w,h,r,isMax){ const a=src.slice(0), b=new Float32Array(w*h), mx=w>h?w:h, dq=new Int32Array(mx), vals=new Float32Array(mx); for(let y=0;y<h;y++) lineMinMax(a,b,y*w,1,w,r,isMax,dq,vals); for(let x=0;x<w;x++) lineMinMax(b,a,x,w,h,r,isMax,dq,vals); return a; }
+  function refine(rawMask,w,h,thr,grow,feather){
+    let m=new Float32Array(w*h);
+    for(let i=0;i<w*h;i++) m[i]=rawMask[i]>=thr?1:0;
+    if(grow>0) m=morph(m,w,h,grow,true); else if(grow<0) m=morph(m,w,h,-grow,false);
+    if(feather>0) m=boxBlur(m,w,h,feather);
+    return m;
+  }
+
+  /* ---- operation sources (produce modified pixels for the region) ---- */
+  const supportsFilter=(()=>{ try{ return typeof newCanvas(1,1).getContext('2d').filter!=='undefined'; }catch(e){ return false; } })();
+  function collageData(baseCanvas,w,h,n){ const coll=CollageFx.renderCollage(baseCanvas,n); const t=newCanvas(w,h); t.getContext('2d').drawImage(coll,0,0,w,h); return t.getContext('2d').getImageData(0,0,w,h).data; }
+  function chromaData(baseData,w,h,axis,amtPct,iters){ const shiftPx=Math.round(w*amtPct/100); let out=baseData; for(let i=0;i<Math.max(1,iters);i++) out=ChromaFx.shift(out,w,h,2,0,axis,shiftPx,'opposite'); return out.data; }
+  function lowresData(baseCanvas,w,h,block){ const sw=Math.max(1,Math.round(w/block)), sh=Math.max(1,Math.round(h/block)); const small=newCanvas(sw,sh); const sc=small.getContext('2d'); sc.imageSmoothingEnabled=true; sc.drawImage(baseCanvas,0,0,sw,sh); const up=newCanvas(w,h); const uc=up.getContext('2d'); uc.imageSmoothingEnabled=false; uc.drawImage(small,0,0,sw,sh,0,0,w,h); return uc.getImageData(0,0,w,h).data; }
+  function fillData(baseData,w,h,p){ return FillFx.apply(baseData,w,h,p).data; }
+  function blurData(baseCanvas,baseData,w,h,px){
+    if(px<=0) return baseData.data;
+    if(supportsFilter){
+      const pad=Math.min(px,Math.max(w,h)), pw=w+2*pad, ph=h+2*pad, pc=newCanvas(pw,ph), pcx=pc.getContext('2d');
+      pcx.drawImage(baseCanvas,pad,pad);
+      pcx.drawImage(baseCanvas,0,0,1,h, 0,pad,pad,h); pcx.drawImage(baseCanvas,w-1,0,1,h, w+pad,pad,pad,h);
+      pcx.drawImage(baseCanvas,0,0,w,1, pad,0,w,pad); pcx.drawImage(baseCanvas,0,h-1,w,1, pad,h+pad,w,pad);
+      pcx.drawImage(baseCanvas,0,0,1,1, 0,0,pad,pad); pcx.drawImage(baseCanvas,w-1,0,1,1, w+pad,0,pad,pad);
+      pcx.drawImage(baseCanvas,0,h-1,1,1, 0,h+pad,pad,pad); pcx.drawImage(baseCanvas,w-1,h-1,1,1, w+pad,h+pad,pad,pad);
+      const bc=newCanvas(pw,ph), bx=bc.getContext('2d'); bx.filter='blur('+px+'px)'; bx.drawImage(pc,0,0); bx.filter='none';
+      return bx.getImageData(pad,pad,w,h).data;
+    }
+    const n=w*h, src=baseData.data, R=new Float32Array(n), G=new Float32Array(n), B=new Float32Array(n);
+    for(let i=0,p=0;i<n;i++,p+=4){ R[i]=src[p]; G[i]=src[p+1]; B[i]=src[p+2]; }
+    const r=Math.max(1,Math.round(px/3)); let Rb=R,Gb=G,Bb=B; for(let k=0;k<3;k++){ Rb=boxBlur(Rb,w,h,r); Gb=boxBlur(Gb,w,h,r); Bb=boxBlur(Bb,w,h,r); }
+    const out=new Uint8ClampedArray(src.length); for(let i=0,p=0;i<n;i++,p+=4){ out[p]=Rb[i]; out[p+1]=Gb[i]; out[p+2]=Bb[i]; out[p+3]=255; } return out;
+  }
+
+  async function render(srcCanvas,p){
+    const base=scaleToMax(srcCanvas,MAX_DIM), w=base.width, h=base.height, baseData=canvasData(base);
+    const rawMask=await segment(base);
+    const alphaFg=refine(rawMask,w,h,+p.threshold, +p.grow|0, +p.feather|0);
+    const onFg=(p.target==='foreground');
+    // Show-mask preview: white = selected region.
+    if(p.showMask){
+      const out=new ImageData(w,h), d=out.data;
+      for(let i=0,q=0;i<w*h;i++,q+=4){ const a=onFg?alphaFg[i]:1-alphaFg[i]; const v=Math.round(a*255); d[q]=v; d[q+1]=v; d[q+2]=v; d[q+3]=255; }
+      return dataToCanvas(out);
+    }
+    // Modified colour source for the selected region (null → invert).
+    let mod=null; const op=p.operation;
+    if(op==='collage') mod=collageData(base,w,h,+p.sections|0);
+    else if(op==='chroma') mod=chromaData(baseData,w,h,p.chromaAxis,+p.chromaAmt,+p.chromaIter|0);
+    else if(op==='lowres') mod=lowresData(base,w,h,+p.lowres|0);
+    else if(op==='blur') mod=blurData(base,baseData,w,h,+p.blur|0);
+    else if(op==='fill'){
+      const fp={ diagonal:p.fDir==='diagonal', combined:!!p.fCombined, dir:p.fDir,
+        startX:+p.fStartX/100, stopX:+p.fStopX/100, startY:+p.fStartY/100, stopY:+p.fStopY/100,
+        dx:+p.fDx/100, dy:+p.fDy/100, slope:+p.fSlope, hDir:p.fHDir, hStart:+p.fHPct/100, vDir:p.fVDir, vStart:+p.fVPct/100 };
+      mod=fillData(baseData,w,h,fp);
+    }
+    const src=baseData.data, out=new ImageData(new Uint8ClampedArray(src),w,h), d=out.data;
+    for(let i=0,q=0;i<w*h;i++,q+=4){
+      const a=onFg?alphaFg[i]:1-alphaFg[i]; if(a<=0) continue;
+      const mr=mod?mod[q]:255-src[q], mg=mod?mod[q+1]:255-src[q+1], mb=mod?mod[q+2]:255-src[q+2];
+      if(a>=1){ d[q]=mr; d[q+1]=mg; d[q+2]=mb; }
+      else { d[q]=src[q]+(mr-src[q])*a; d[q+1]=src[q+1]+(mg-src[q+1])*a; d[q+2]=src[q+2]+(mb-src[q+2])*a; }
+    }
+    return dataToCanvas(out);
+  }
+  return {render};
+})();
+
+/* ================================================================== */
+/*  Node type registry                                                 */
+/*  Each type: {title, icon, inputs:[labels], params:[...], process}   */
+/*  process(inputCanvases, params, node) -> canvas | Promise<canvas>   */
+/* ================================================================== */
+const RGB_OPTS=[{value:'0',label:'Red'},{value:'1',label:'Green'},{value:'2',label:'Blue'}];
+const DIR_OPTS=[{value:'left',label:'Left'},{value:'right',label:'Right'},{value:'up',label:'Up'},{value:'down',label:'Down'},{value:'diagonal',label:'Diagonal'}];
+
+function fillParams(prefix,vis){
+  // Shared fill parameter set (used by the Fill node and the Foreground op).
+  const k=s=>prefix+s;
+  const notDiag=p=>vis(p) && p[k('Dir')]!=='diagonal';
+  const isDiag=p=>vis(p) && p[k('Dir')]==='diagonal';
+  const comb=p=>notDiag(p) && !!p[k('Combined')];
+  return [
+    {key:k('Dir'),label:'Direction',type:'select',options:DIR_OPTS,default:'right',showIf:vis},
+    {key:k('StartX'),label:'Start X',type:'range',min:0,max:100,step:1,default:0,suffix:'%',showIf:notDiag},
+    {key:k('StopX'),label:'Stop X',type:'range',min:0,max:100,step:1,default:30,suffix:'%',showIf:notDiag},
+    {key:k('StartY'),label:'Start Y',type:'range',min:0,max:100,step:1,default:0,suffix:'%',showIf:notDiag},
+    {key:k('StopY'),label:'Stop Y',type:'range',min:0,max:100,step:1,default:100,suffix:'%',showIf:notDiag},
+    {key:k('Dx'),label:'Anchor X',type:'range',min:0,max:100,step:1,default:20,suffix:'%',showIf:isDiag},
+    {key:k('Dy'),label:'Anchor Y',type:'range',min:0,max:100,step:1,default:50,suffix:'%',showIf:isDiag},
+    {key:k('Slope'),label:'Slope',type:'range',min:-3,max:3,step:0.1,default:0.5,dp:1,showIf:isDiag},
+    {key:k('Combined'),label:'Combined (corner) fill',type:'toggle',default:false,showIf:notDiag},
+    {key:k('HDir'),label:'H direction',type:'select',options:[{value:'left',label:'Left'},{value:'right',label:'Right'}],default:'right',showIf:comb},
+    {key:k('HPct'),label:'H fill',type:'range',min:0,max:100,step:1,default:40,suffix:'%',showIf:comb},
+    {key:k('VDir'),label:'V direction',type:'select',options:[{value:'up',label:'Up'},{value:'down',label:'Down'}],default:'down',showIf:comb},
+    {key:k('VPct'),label:'V fill',type:'range',min:0,max:100,step:1,default:30,suffix:'%',showIf:comb},
+  ];
+}
+
+function vampireParams(){
+  const D=VampireFx.defaultPreset(), out=[];
+  VampireFx.GROUPS.forEach(g=>{
+    out.push({heading:g.title});
+    g.items.forEach(it=>{
+      out.push({key:it.key,label:it.label,type:'range',min:it.min,max:it.max,step:it.step,
+        default:(it.key==='strength'?100:D[it.key]), suffix:it.suffix, dp:it.dp, scale:it.scale});
+    });
+  });
+  out.push({heading:'Toggles'});
+  out.push({key:'grainOn',label:'Film grain',type:'toggle',default:true});
+  out.push({key:'vignetteOn',label:'Vignette',type:'toggle',default:true});
+  return out;
+}
+function vampPreset(p){
+  const preset=VampireFx.defaultPreset();
+  VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>{ let v=+p[it.key]; if(it.scale) v*=it.scale; preset[it.key]=v; }));
+  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn; preset.seed=12345;
+  return preset;
+}
+
+const NODE_TYPES={
+  source:{
+    title:'Image', icon:'🖼️', inputs:[], source:true, params:[],
+    process(_,p,node){ return node.image||null; }
+  },
+  chroma:{
+    title:'Chroma Shift', icon:'🌈', inputs:['Image'],
+    params:[
+      {key:'channelA',label:'Channel A',type:'select',options:RGB_OPTS,default:'0'},
+      {key:'channelB',label:'Channel B',type:'select',options:RGB_OPTS,default:'2'},
+      {key:'axis',label:'Axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x'},
+      {key:'amount',label:'Shift',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%'},
+      {key:'mode',label:'Direction',type:'select',options:[{value:'opposite',label:'Opposite'},{value:'same',label:'Same'}],default:'opposite'},
+      {key:'iterations',label:'Iterations',type:'range',min:1,max:20,step:1,default:1},
+    ],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const w=src.width,h=src.height; let out=canvasData(src);
+      const shiftPx=Math.round(w*(+p.amount)/100), iters=Math.max(1,+p.iterations|0);
+      for(let i=0;i<iters;i++) out=ChromaFx.shift(out,w,h,+p.channelA,+p.channelB,p.axis,shiftPx,p.mode);
+      return dataToCanvas(out);
+    }
+  },
+  fill:{
+    title:'Fill', icon:'🪣', inputs:['Image'],
+    params: fillParams('',()=>true),
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const w=src.width,h=src.height, data=canvasData(src);
+      const pp={ diagonal:p.Dir==='diagonal', combined:!!p.Combined, dir:p.Dir,
+        startX:+p.StartX/100, stopX:+p.StopX/100, startY:+p.StartY/100, stopY:+p.StopY/100,
+        dx:+p.Dx/100, dy:+p.Dy/100, slope:+p.Slope, hDir:p.HDir, hStart:+p.HPct/100, vDir:p.VDir, vStart:+p.VPct/100 };
+      return dataToCanvas(FillFx.apply(data,w,h,pp));
+    }
+  },
+  collage:{
+    title:'4-Way Collage', icon:'🪞', inputs:['Image'],
+    params:[{key:'sections',label:'Sections',type:'range',min:2,max:60,step:1,default:20}],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const coll=CollageFx.renderCollage(src,+p.sections|0);
+      const out=newCanvas(src.width,src.height);
+      out.getContext('2d').drawImage(coll,0,0,src.width,src.height);
+      return out;
+    }
+  },
+  vampire:{
+    title:'Vampire', icon:'🧛', inputs:['Image'],
+    params: vampireParams(),
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const scaled=scaleToMax(src,2000), w=scaled.width, h=scaled.height, base=canvasData(scaled);
+      const out=VampireFx.process(VampireFx.toRgb(base),w,h,vampPreset(p));
+      return dataToCanvas(VampireFx.toImageData(out,w,h,base));
+    }
+  },
+  fgbg:{
+    title:'Foreground / Background', icon:'🧍', inputs:['Image'], async:true,
+    params:[
+      {key:'target',label:'Operate on',type:'select',options:[{value:'foreground',label:'Foreground'},{value:'background',label:'Background'}],default:'foreground'},
+      {key:'operation',label:'Operation',type:'select',options:[
+        {value:'invert',label:'Invert colours'},{value:'collage',label:'4-Way Collage'},{value:'chroma',label:'Chroma Shift'},
+        {value:'lowres',label:'Low resolution'},{value:'fill',label:'Fill'},{value:'blur',label:'Blur'}],default:'invert'},
+      {key:'sections',label:'Sections',type:'range',min:2,max:60,step:1,default:20,showIf:p=>p.operation==='collage'},
+      {key:'chromaAmt',label:'Chroma shift',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%',showIf:p=>p.operation==='chroma'},
+      {key:'chromaAxis',label:'Chroma axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x',showIf:p=>p.operation==='chroma'},
+      {key:'chromaIter',label:'Chroma iterations',type:'range',min:1,max:20,step:1,default:1,showIf:p=>p.operation==='chroma'},
+      {key:'lowres',label:'Pixel size',type:'range',min:2,max:60,step:1,default:12,suffix:' px',showIf:p=>p.operation==='lowres'},
+      {key:'blur',label:'Blur radius',type:'range',min:0,max:60,step:1,default:12,suffix:' px',showIf:p=>p.operation==='blur'},
+      ...fillParams('f',p=>p.operation==='fill'),
+      {key:'threshold',label:'Mask threshold',type:'range',min:0,max:1,step:0.01,default:0.5,dp:2},
+      {key:'grow',label:'Grow / shrink',type:'range',min:-20,max:20,step:1,default:0,suffix:' px'},
+      {key:'feather',label:'Smooth edges',type:'range',min:0,max:30,step:1,default:2,suffix:' px'},
+      {key:'showMask',label:'Show mask',type:'toggle',default:false},
+    ],
+    process(inputs,p){ const src=inputs[0]; if(!src) return null; return FgBgFx.render(src,p); }
+  },
+  boxes:{
+    title:'Boxes', icon:'🧩', inputs:['1','2','3','4','5'],
+    params:[
+      {key:'mode',label:'Mode',type:'select',options:[{value:'divisions',label:'By divisions (N×N)'},{value:'blocksize',label:'By block size'}],default:'divisions'},
+      {key:'N',label:'Divisions (N)',type:'range',min:2,max:40,step:1,default:8,showIf:p=>p.mode==='divisions'},
+      {key:'unit',label:'Block unit',type:'select',options:[{value:'pct',label:'Percent'},{value:'px',label:'Pixels'}],default:'pct',showIf:p=>p.mode==='blocksize'},
+      {key:'blockW',label:'Block width',type:'number',min:1,default:20,showIf:p=>p.mode==='blocksize'},
+      {key:'blockH',label:'Block height',type:'number',min:1,default:20,showIf:p=>p.mode==='blocksize'},
+      {key:'order',label:'Order',type:'select',options:[{value:'normal',label:'Normal'},{value:'reverse',label:'Reversed'}],default:'normal'},
+      {key:'fit',label:'Size fit',type:'select',options:[{value:'first',label:'First image'},{value:'min',label:'Common minimum'}],default:'first'},
+    ],
+    process(inputs,p){ return BoxesFx.run(inputs.filter(Boolean),p); }
+  },
+  channel:{
+    title:'Channel Merge', icon:'🎛️', inputs:['1','2','3','4','5','6'],
+    params:[
+      {key:'s1',label:'Red strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'s2',label:'Green strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'s3',label:'Blue strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'s4',label:'Cyan strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'s5',label:'Yellow strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'s6',label:'Magenta strength',type:'range',min:0,max:100,step:1,default:30,suffix:'%'},
+      {key:'fit',label:'Size fit',type:'select',options:[{value:'first',label:'First image'},{value:'min',label:'Common minimum'}],default:'first'},
+    ],
+    process(inputs,p){ return ChannelFx.merge(inputs,[+p.s1,+p.s2,+p.s3,+p.s4,+p.s5,+p.s6],p.fit); }
+  },
+  preview:{
+    title:'Preview', icon:'👁️', inputs:['Image'], preview:true, params:[],
+    process(inputs){ return inputs[0]||null; }
+  },
+};
+
+// Order the palette buttons.
+const PALETTE=['source','chroma','fill','collage','vampire','fgbg','boxes','channel','preview'];
+
+/* ================================================================== */
+/*  Graph state                                                        */
+/* ================================================================== */
+let NODES={};           // id -> node
+let nodeSeq=0;
+let selectedId=null;
+let view={x:60,y:20,scale:1};
+let evalGen=0;
+let evalScheduled=false;
+
+const stage=document.getElementById('stage');
+const world=document.getElementById('world');
+const wiresSvg=document.getElementById('wires');
+const gridCanvas=document.getElementById('grid');
+
+function makeNode(type,x,y){
+  const t=NODE_TYPES[type];
+  const node={ id:'n'+(++nodeSeq), type, x, y, params:{}, inputs:new Array(t.inputs.length).fill(null),
+    el:null, thumb:null, _out:null, error:null, image:null };
+  t.params.forEach(pd=>{ if(pd.key!==undefined) node.params[pd.key]=pd.default; });
+  return node;
+}
+function addNode(type,x,y){ const n=makeNode(type,x,y); NODES[n.id]=n; renderNode(n); return n; }
+function removeNode(id){
+  const n=NODES[id]; if(!n) return;
+  // Drop connections that referenced this node.
+  Object.values(NODES).forEach(other=>{ other.inputs=other.inputs.map(s=> s===id?null:s); });
+  if(n.el) n.el.remove();
+  delete NODES[id];
+  if(selectedId===id) selectedId=null;
+  drawWires(); scheduleEval();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Coordinate helpers (screen <-> world)                              */
+/* ------------------------------------------------------------------ */
+function screenToWorld(clientX,clientY){
+  const r=stage.getBoundingClientRect();
+  return { x:(clientX-r.left-view.x)/view.scale, y:(clientY-r.top-view.y)/view.scale };
+}
+function applyView(){
+  world.style.transform='translate('+view.x+'px,'+view.y+'px) scale('+view.scale+')';
+  document.getElementById('zoomVal').textContent=Math.round(view.scale*100)+'%';
+  drawGrid();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Node DOM                                                           */
+/* ------------------------------------------------------------------ */
+function renderNode(node){
+  const t=NODE_TYPES[node.type];
+  const el=document.createElement('div');
+  el.className='node'+(t.preview?' preview':'');
+  el.dataset.id=node.id;
+  el.style.left=node.x+'px'; el.style.top=node.y+'px';
+
+  // head
+  const head=document.createElement('div'); head.className='head';
+  head.innerHTML='<span class="ico">'+t.icon+'</span><span class="ttl">'+t.title+'</span>';
+  const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='Delete block';
+  x.addEventListener('pointerdown',e=>e.stopPropagation());
+  x.addEventListener('click',e=>{ e.stopPropagation(); removeNode(node.id); });
+  head.appendChild(x);
+  el.appendChild(head);
+
+  // body
+  const body=document.createElement('div'); body.className='body';
+
+  if(t.source){
+    // upload control
+    const label=document.createElement('label'); label.className='filebtn'; label.textContent='Upload image…';
+    const fi=document.createElement('input'); fi.type='file'; fi.accept='image/*'; fi.hidden=true;
+    label.appendChild(fi);
+    const fname=document.createElement('div'); fname.className='fname'; fname.textContent='Using a sample image';
+    fi.addEventListener('change',async e=>{
+      const f=e.target.files[0]; if(!f) return;
+      try{
+        const img=await loadImage(f); const c=scaleToMax(img,1600);
+        node.image=cloneCanvas(c);
+        node.imageName=(f.name||'image').replace(/\.[^.]+$/,'')||'image';
+        node._imgId='up'+Date.now()+'_'+(f.name||'');   // bump so the cache re-evaluates
+        fname.textContent=f.name||'image';
+        scheduleEval();
+      }
+      catch(err){ toast('Could not load that image.'); }
+    });
+    label.addEventListener('pointerdown',e=>e.stopPropagation());
+    body.appendChild(label); body.appendChild(fname);
+  }
+
+  // thumbnail + download
+  const tw=document.createElement('div'); tw.className='thumbwrap';
+  const thumb=document.createElement('canvas'); thumb.className='thumb'; thumb.width=210; thumb.height=140;
+  const meta=document.createElement('div'); meta.className='thumbmeta';
+  const res=document.createElement('span'); res.className='res'; res.textContent='—';
+  const dl=document.createElement('button'); dl.className='dlbtn'; dl.textContent='⬇ PNG'; dl.disabled=true;
+  dl.addEventListener('pointerdown',e=>e.stopPropagation());
+  dl.addEventListener('click',e=>{ e.stopPropagation(); if(node._out) download(node._out,(node.imageName||NODE_TYPES[node.type].title.replace(/[^\w]+/g,'_').toLowerCase())+'.png'); });
+  meta.appendChild(res); meta.appendChild(dl);
+  tw.appendChild(thumb); tw.appendChild(meta);
+  body.appendChild(tw);
+
+  const err=document.createElement('div'); err.className='err'; err.hidden=true; body.appendChild(err);
+
+  // params
+  const params=document.createElement('div'); params.className='params';
+  buildParams(node,params);
+  body.appendChild(params);
+
+  el.appendChild(body);
+
+  // ports
+  t.inputs.forEach((lbl,i)=>{
+    const port=document.createElement('div'); port.className='port in'; port.dataset.id=node.id; port.dataset.idx=i; port.dataset.kind='in';
+    if(t.inputs.length>1){ const pl=document.createElement('span'); pl.className='plabel'; pl.textContent=lbl; port.appendChild(pl); }
+    el.appendChild(port);
+  });
+  // Every node except the pure sink (Preview) has a single output port.
+  if(!t.preview){
+    const outp=document.createElement('div'); outp.className='port out'; outp.dataset.id=node.id; outp.dataset.kind='out';
+    el.appendChild(outp);
+  }
+
+  node.el=el; node.thumb=thumb; node._res=res; node._dl=dl; node._err=err;
+  world.appendChild(el);
+  positionInPorts(node);
+  wireNodeInteractions(node);
+}
+
+// Distribute input ports vertically along the left edge.
+function positionInPorts(node){
+  if(!node.el) return;
+  const ports=node.el.querySelectorAll('.port.in');
+  const h=node.el.offsetHeight||120;
+  const n=ports.length;
+  ports.forEach((p,i)=>{ const frac=(i+1)/(n+1); p.style.top=(frac*h-7)+'px'; });
+  const out=node.el.querySelector('.port.out');
+  if(out) out.style.top=(h/2-7)+'px';
+}
+
+/* ---- params UI ---- */
+function fmtVal(pd,v){
+  if(pd.type!=='range') return '';
+  if(pd.dp!=null) return (+v).toFixed(pd.dp)+(pd.suffix||'');
+  return Math.round(+v)+(pd.suffix||'');
+}
+function buildParams(node,container){
+  const t=NODE_TYPES[node.type];
+  container.innerHTML='';
+  node._paramEls=[];
+  t.params.forEach(pd=>{
+    if(pd.heading){ const h=document.createElement('div'); h.className='p-sub'; h.textContent=pd.heading; container.appendChild(h); node._paramEls.push({pd,row:h}); return; }
+    const row=document.createElement('div');
+    if(pd.type==='toggle'){
+      row.className='p-toggle';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!node.params[pd.key];
+      const lb=document.createElement('span'); lb.textContent=pd.label;
+      cb.addEventListener('change',()=>{ node.params[pd.key]=cb.checked; refreshParamVisibility(node); scheduleEval(); });
+      row.appendChild(cb); row.appendChild(lb);
+    }else{
+      row.className='p-row';
+      const lab=document.createElement('label'); lab.textContent=pd.label;
+      let input;
+      if(pd.type==='select'){
+        input=document.createElement('select');
+        pd.options.forEach(o=>{ const op=document.createElement('option'); op.value=o.value; op.textContent=o.label; input.appendChild(op); });
+        input.value=node.params[pd.key];
+        input.addEventListener('change',()=>{ node.params[pd.key]=input.value; refreshParamVisibility(node); scheduleEval(); });
+        lab.textContent=pd.label; row.appendChild(lab); row.appendChild(input);
+      }else if(pd.type==='number'){
+        input=document.createElement('input'); input.type='number'; if(pd.min!=null)input.min=pd.min; input.value=node.params[pd.key];
+        input.addEventListener('input',()=>{ node.params[pd.key]=input.value; scheduleEval(); });
+        row.appendChild(lab); row.appendChild(input);
+      }else{ // range
+        const vspan=document.createElement('span'); vspan.className='v'; vspan.textContent=fmtVal(pd,node.params[pd.key]);
+        lab.appendChild(vspan);
+        input=document.createElement('input'); input.type='range'; input.min=pd.min; input.max=pd.max; input.step=pd.step; input.value=node.params[pd.key];
+        input.addEventListener('input',()=>{ node.params[pd.key]=input.value; vspan.textContent=fmtVal(pd,input.value); scheduleEval(); });
+        row.appendChild(lab); row.appendChild(input);
+      }
+      // Prevent node drag / pan when interacting with a control.
+      row.addEventListener('pointerdown',e=>e.stopPropagation());
+    }
+    row.addEventListener('pointerdown',e=>e.stopPropagation());
+    container.appendChild(row);
+    node._paramEls.push({pd,row});
+  });
+  refreshParamVisibility(node);
+}
+function refreshParamVisibility(node){
+  if(!node._paramEls) return;
+  node._paramEls.forEach(({pd,row})=>{ if(pd.showIf){ row.style.display = pd.showIf(node.params)?'' : 'none'; } });
+  // heights changed → re-place ports + wires (only once the node is mounted)
+  if(node.el){ positionInPorts(node); drawWires(); }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Selection                                                          */
+/* ------------------------------------------------------------------ */
+function selectNode(id){
+  selectedId=id;
+  Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===id); });
+  if(id){ const n=NODES[id]; // bring to front
+    if(n&&n.el) world.appendChild(n.el);
+    requestAnimationFrame(()=>{ if(n) { positionInPorts(n); drawWires(); } });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Node interactions: drag to move, ports to connect                  */
+/* ------------------------------------------------------------------ */
+function wireNodeInteractions(node){
+  const head=node.el.querySelector('.head');
+  // Drag the node by its header (and body background).
+  function startDrag(e){
+    if(e.button!=null && e.button!==0) return;
+    selectNode(node.id);
+    const start=screenToWorld(e.clientX,e.clientY);
+    const ox=node.x, oy=node.y;
+    let moved=false;
+    function move(ev){
+      const w=screenToWorld(ev.clientX,ev.clientY);
+      node.x=ox+(w.x-start.x); node.y=oy+(w.y-start.y);
+      node.el.style.left=node.x+'px'; node.el.style.top=node.y+'px';
+      moved=true; drawWires();
+    }
+    function up(){ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); }
+    document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+    e.stopPropagation();
+  }
+  head.addEventListener('pointerdown',startDrag);
+  // Clicking the body (not a control) selects + drags too.
+  node.el.querySelector('.body').addEventListener('pointerdown',e=>{ startDrag(e); });
+
+  // Ports.
+  node.el.querySelectorAll('.port').forEach(port=>{
+    port.addEventListener('pointerdown',e=>{
+      e.stopPropagation(); e.preventDefault();
+      if(port.dataset.kind==='out') startWire(node.id, e);
+      else { // input port: click disconnects; drag rewires from here
+        const idx=+port.dataset.idx;
+        if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); }
+      }
+    });
+  });
+}
+
+// Wire dragging from an output port.
+let tempWire=null;
+function startWire(srcId, e){
+  const from=outPortWorld(srcId);
+  tempWire=document.createElementNS('http://www.w3.org/2000/svg','path');
+  tempWire.setAttribute('class','temp');
+  wiresSvg.appendChild(tempWire);
+  function move(ev){
+    const to=screenToWorld(ev.clientX,ev.clientY);
+    tempWire.setAttribute('d',wirePath(from.x,from.y,to.x,to.y));
+  }
+  function up(ev){
+    document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
+    if(tempWire){ tempWire.remove(); tempWire=null; }
+    const el=document.elementFromPoint(ev.clientX,ev.clientY);
+    const port=el&&el.closest?el.closest('.port.in'):null;
+    if(port){ const dstId=port.dataset.id, idx=+port.dataset.idx; connect(srcId,dstId,idx); }
+  }
+  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+  move(e);
+}
+function connect(srcId,dstId,idx){
+  if(srcId===dstId){ toast('A block can\'t feed itself.'); return; }
+  if(createsCycle(srcId,dstId)){ toast('That would make a loop.'); return; }
+  NODES[dstId].inputs[idx]=srcId;
+  drawWires(); scheduleEval();
+}
+// Would connecting src->dst create a cycle? (dst must not be an ancestor of src.)
+function createsCycle(srcId,dstId){
+  const seen=new Set(); const stack=[srcId];
+  while(stack.length){ const id=stack.pop(); if(id===dstId) return true; if(seen.has(id))continue; seen.add(id);
+    const n=NODES[id]; if(n) n.inputs.forEach(s=>{ if(s!=null) stack.push(s); }); }
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Wires (SVG, world coords)                                          */
+/* ------------------------------------------------------------------ */
+function portCenterWorld(node,portEl){
+  return { x:node.x + portEl.offsetLeft + portEl.offsetWidth/2,
+           y:node.y + portEl.offsetTop  + portEl.offsetHeight/2 };
+}
+function outPortWorld(id){ const n=NODES[id]; const p=n.el.querySelector('.port.out'); return portCenterWorld(n,p); }
+function inPortWorld(id,idx){ const n=NODES[id]; const p=n.el.querySelector('.port.in[data-idx="'+idx+'"]'); return p?portCenterWorld(n,p):{x:n.x,y:n.y}; }
+function wirePath(x1,y1,x2,y2){ const dx=Math.max(40,Math.abs(x2-x1)*0.5); return 'M '+x1+' '+y1+' C '+(x1+dx)+' '+y1+' '+(x2-dx)+' '+y2+' '+x2+' '+y2; }
+function drawWires(){
+  // Keep any temp wire; rebuild the committed ones.
+  [...wiresSvg.querySelectorAll('path.wire')].forEach(p=>p.remove());
+  Object.values(NODES).forEach(dst=>{
+    dst.inputs.forEach((srcId,idx)=>{
+      if(srcId==null||!NODES[srcId]) return;
+      const a=outPortWorld(srcId), b=inPortWorld(dst.id,idx);
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('class','wire'); path.setAttribute('d',wirePath(a.x,a.y,b.x,b.y));
+      path.addEventListener('click',e=>{ e.stopPropagation(); dst.inputs[idx]=null; drawWires(); scheduleEval(); });
+      wiresSvg.appendChild(path);
+    });
+    // reflect connected state on input ports
+    if(dst.el) dst.el.querySelectorAll('.port.in').forEach(p=>{ p.classList.toggle('connected', dst.inputs[+p.dataset.idx]!=null); });
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Evaluation engine (DAG, async, cached by signature)               */
+/* ------------------------------------------------------------------ */
+function nodeSignature(node,inputSigs){
+  const base=node.type==='source'?(node._imgId||'none'):'';
+  return node.type+'|'+base+'|'+JSON.stringify(node.params)+'|'+inputSigs.join(',');
+}
+function scheduleEval(){
+  if(evalScheduled) return; evalScheduled=true;
+  requestAnimationFrame(()=>{ evalScheduled=false; runGraph(); });
+}
+async function runGraph(){
+  const myGen=++evalGen;
+  const promises=new Map();     // id -> Promise<{canvas,sig}>
+  function evalNode(id){
+    if(promises.has(id)) return promises.get(id);
+    const node=NODES[id];
+    const p=(async()=>{
+      const t=NODE_TYPES[node.type];
+      const inResults=await Promise.all(node.inputs.map(s=> s!=null&&NODES[s]?evalNode(s):Promise.resolve(null)));
+      const inputCanvases=inResults.map(r=>r?r.canvas:null);
+      const inputSigs=inResults.map(r=>r?r.sig:'0');
+      const sig=nodeSignature(node,inputSigs);
+      if(node._sig===sig && node._out!==undefined){ return {canvas:node._out,sig}; }
+      let out=null; node.error=null;
+      try{ out=await t.process(inputCanvases,node.params,node); }
+      catch(e){ node.error=String((e&&e.message)||e); }
+      node._out=out; node._sig=sig;
+      if(myGen===evalGen) paintNode(node);
+      return {canvas:out,sig};
+    })();
+    promises.set(id,p); return p;
+  }
+  const ids=Object.keys(NODES);
+  await Promise.all(ids.map(evalNode));
+  if(myGen!==evalGen) return;
+  ids.forEach(id=>paintNode(NODES[id]));
+  drawWires();
+}
+function paintNode(node){
+  if(!node.thumb) return;
+  const out=node._out, thumb=node.thumb, ctx=thumb.getContext('2d');
+  // error
+  if(node._err){ node._err.hidden=!node.error; node._err.textContent=node.error||''; }
+  if(!out){
+    thumb.width=210; thumb.height=node.type==='source'?90:120;
+    ctx.clearRect(0,0,thumb.width,thumb.height);
+    ctx.fillStyle='#0b0d12'; ctx.fillRect(0,0,thumb.width,thumb.height);
+    ctx.fillStyle='#5a6472'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(node.type==='source'?'no image':(node.error?'error':'connect an input'), thumb.width/2, thumb.height/2);
+    if(node._res) node._res.textContent='—';
+    if(node._dl) node._dl.disabled=true;
+    positionInPorts(node);
+    return;
+  }
+  const maxW=NODE_TYPES[node.type].preview?320:210;
+  const maxH=NODE_TYPES[node.type].preview?340:180;
+  const s=Math.min(maxW/out.width, maxH/out.height, 1);
+  const dw=Math.max(1,Math.round(out.width*s)), dh=Math.max(1,Math.round(out.height*s));
+  thumb.width=dw; thumb.height=dh;
+  ctx.clearRect(0,0,dw,dh); ctx.drawImage(out,0,0,dw,dh);
+  if(node._res) node._res.textContent=out.width+'×'+out.height;
+  if(node._dl) node._dl.disabled=false;
+  positionInPorts(node);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Sample image so previews render before any upload                  */
+/* ------------------------------------------------------------------ */
+function makeSampleImage(){
+  const w=900,h=600,c=newCanvas(w,h),ctx=c.getContext('2d');
+  const g=ctx.createLinearGradient(0,0,w,h);
+  g.addColorStop(0,'#ff8a3d'); g.addColorStop(.35,'#ff3d77'); g.addColorStop(.7,'#7a5cff'); g.addColorStop(1,'#2ad0ff');
+  ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
+  const dots=[['#ffe066',150,160,90],['#06d6a0',680,180,70],['#ef476f',740,430,110],['#118ab2',260,440,80],['#ffffff',470,300,55]];
+  dots.forEach(([col,x,y,r])=>{ ctx.beginPath(); ctx.fillStyle=col; ctx.globalAlpha=.9; ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); });
+  ctx.globalAlpha=1;
+  ctx.fillStyle='rgba(0,0,0,.28)'; ctx.fillRect(0,h-120,w,120);
+  ctx.fillStyle='#fff'; ctx.font='bold 64px -apple-system,sans-serif'; ctx.textBaseline='middle';
+  ctx.fillText('anagnor', 40, h-60);
+  return c;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pan / zoom                                                         */
+/* ------------------------------------------------------------------ */
+stage.addEventListener('pointerdown',e=>{
+  if(e.target!==stage && e.target!==gridCanvas && e.target!==world) return;
+  selectNode(null);
+  stage.classList.add('panning');
+  const sx=e.clientX, sy=e.clientY, ox=view.x, oy=view.y;
+  function move(ev){ view.x=ox+(ev.clientX-sx); view.y=oy+(ev.clientY-sy); applyView(); }
+  function up(){ stage.classList.remove('panning'); document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); }
+  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+});
+stage.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=stage.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  const wx=(mx-view.x)/view.scale, wy=(my-view.y)/view.scale;
+  const factor=e.deltaY<0?1.1:1/1.1;
+  view.scale=Math.max(0.3,Math.min(2.2,view.scale*factor));
+  view.x=mx-wx*view.scale; view.y=my-wy*view.scale;
+  applyView();
+},{passive:false});
+function zoomBy(f){
+  const r=stage.getBoundingClientRect(), mx=r.width/2, my=r.height/2;
+  const wx=(mx-view.x)/view.scale, wy=(my-view.y)/view.scale;
+  view.scale=Math.max(0.3,Math.min(2.2,view.scale*f));
+  view.x=mx-wx*view.scale; view.y=my-wy*view.scale; applyView();
+}
+document.getElementById('zoomIn').addEventListener('click',()=>zoomBy(1.15));
+document.getElementById('zoomOut').addEventListener('click',()=>zoomBy(1/1.15));
+document.getElementById('zoomFit').addEventListener('click',()=>{ view={x:60,y:20,scale:1}; applyView(); });
+
+function drawGrid(){
+  const r=stage.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
+  gridCanvas.width=r.width*dpr; gridCanvas.height=r.height*dpr;
+  gridCanvas.style.width=r.width+'px'; gridCanvas.style.height=r.height+'px';
+  const ctx=gridCanvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,r.width,r.height);
+  const step=28*view.scale; if(step<10) return;
+  const ox=((view.x)%step+step)%step, oy=((view.y)%step+step)%step;
+  ctx.strokeStyle='rgba(255,255,255,.045)'; ctx.lineWidth=1; ctx.beginPath();
+  for(let x=ox;x<r.width;x+=step){ ctx.moveTo(x,0); ctx.lineTo(x,r.height); }
+  for(let y=oy;y<r.height;y+=step){ ctx.moveTo(0,y); ctx.lineTo(r.width,y); }
+  ctx.stroke();
+}
+window.addEventListener('resize',()=>{ drawGrid(); });
+
+/* ------------------------------------------------------------------ */
+/*  Palette (drag a block onto the canvas, or click to add)            */
+/* ------------------------------------------------------------------ */
+const paletteEl=document.getElementById('palette');
+const ghost=document.getElementById('ghost');
+PALETTE.forEach(type=>{
+  const t=NODE_TYPES[type];
+  const chip=document.createElement('div'); chip.className='chip'; chip.innerHTML='<span>'+t.icon+'</span><span>'+t.title+'</span>';
+  chip.title='Drag onto the canvas, or click to add';
+  chip.addEventListener('pointerdown',e=>{ startPaletteDrag(type,chip,e); });
+  paletteEl.appendChild(chip);
+});
+function spawnAt(type,clientX,clientY){
+  const w=screenToWorld(clientX,clientY);
+  const n=addNode(type, Math.round(w.x-110), Math.round(w.y-40));
+  selectNode(n.id); scheduleEval();
+  return n;
+}
+function startPaletteDrag(type,chip,e){
+  e.preventDefault();
+  const t=NODE_TYPES[type];
+  let dragging=false; const sx=e.clientX, sy=e.clientY;
+  function move(ev){
+    if(!dragging && Math.hypot(ev.clientX-sx,ev.clientY-sy)>6){
+      dragging=true; ghost.hidden=false; ghost.innerHTML='<span>'+t.icon+'</span><span>'+t.title+'</span>';
+    }
+    if(dragging){ ghost.style.left=ev.clientX+'px'; ghost.style.top=ev.clientY+'px'; }
+  }
+  function up(ev){
+    document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
+    ghost.hidden=true;
+    const r=stage.getBoundingClientRect();
+    if(dragging){
+      // dropped over the stage?
+      if(ev.clientX>=r.left && ev.clientX<=r.right && ev.clientY>=r.top && ev.clientY<=r.bottom) spawnAt(type,ev.clientX,ev.clientY);
+    }else{
+      // plain click → add near the centre of the view
+      spawnAt(type, r.left+r.width/2 + (Object.keys(NODES).length%5)*18, r.top+r.height/2 + (Object.keys(NODES).length%5)*18);
+    }
+  }
+  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Toast + help                                                       */
+/* ------------------------------------------------------------------ */
+let toastTimer=null;
+function toast(msg){
+  const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2200);
+}
+document.getElementById('helpClose').addEventListener('click',()=>{ document.getElementById('help').hidden=true; });
+
+/* ------------------------------------------------------------------ */
+/*  Reset / init                                                       */
+/* ------------------------------------------------------------------ */
+function clearGraph(){ Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); }); NODES={}; selectedId=null; drawWires(); }
+function defaultGraph(){
+  clearGraph();
+  const src=addNode('source',40,150);
+  src.image=makeSampleImage(); src._imgId='sample'; src.imageName='sample';
+  const chroma=addNode('chroma',350,150);
+  const prev=addNode('preview',680,120);
+  chroma.inputs[0]=src.id;
+  prev.inputs[0]=chroma.id;
+  drawWires(); scheduleEval();
+}
+document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGraph(); applyView(); });
+
+applyView();
+defaultGraph();
+// Repaint once fonts/layout settle so ports + wires line up.
+window.addEventListener('load',()=>{ Object.values(NODES).forEach(positionInPorts); drawWires(); });
+</script>
+</body>
+</html>
