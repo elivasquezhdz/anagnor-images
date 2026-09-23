@@ -206,9 +206,33 @@
     padding:9px 15px;font-size:.82rem;color:var(--text);opacity:0;transition:opacity .2s;pointer-events:none;
   }
   #toast.show{opacity:1}
+  /* Animate panel */
+  #animPanel{
+    position:absolute;right:16px;top:64px;z-index:30;width:330px;max-width:calc(100vw - 24px);
+    background:var(--panel);border:1px solid var(--border-2);border-radius:14px;
+    box-shadow:0 0 0 1px rgba(63,155,255,.15),0 18px 50px rgba(0,0,0,.6);overflow:hidden;
+  }
+  .anim-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;
+    background:var(--panel-2);border-bottom:1px solid var(--border);font-weight:600}
+  .anim-head .x{background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:0 4px}
+  .anim-head .x:hover{color:var(--danger)}
+  .anim-body{padding:12px 14px;max-height:min(76vh,640px);overflow:auto}
+  .anim-row{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
+  .anim-row label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .anim-row label .u{color:var(--accent-2);text-transform:none;letter-spacing:0}
+  .anim-row select,.anim-row input{background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    border-radius:7px;padding:7px 9px;font-size:.85rem;width:100%}
+  .anim-two{display:flex;gap:10px}
+  .anim-two .anim-row{flex:1}
+  #animPreview{width:100%;background:#0b0d12;border:1px solid var(--border);border-radius:9px;margin:4px 0 8px;display:block;max-height:260px;object-fit:contain}
+  .anim-note{color:var(--muted);font-size:.78rem;margin:2px 0 10px}
+  .anim-btns{display:flex;gap:8px;align-items:center}
+  .anim-btns .btn,.anim-btns .dlbtn{flex:1;padding:9px 8px;font-size:.82rem}
+  .anim-btns .dlbtn{border-radius:9px}
   @media (max-width:640px){
     .brand{margin-right:0}
     #help{max-width:calc(100% - 32px)}
+    #animPanel{right:8px;left:8px;width:auto;top:56px}
   }
 </style>
 </head>
@@ -224,6 +248,7 @@
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="zoomFit" title="Reset view" style="width:auto;padding:0 10px;font-size:.8rem">Reset&nbsp;view</button>
   </div>
+  <button class="btn" id="openAnim">🎞 Animate</button>
   <button class="btn ghost" id="resetGraph">Reset graph</button>
 </div>
 
@@ -245,6 +270,41 @@
   <div id="toast"></div>
 </div>
 <div id="ghost" class="chip act" hidden></div>
+
+<!-- Global Animate panel: sweep one parameter of one block through the live
+     graph, preview it, and export MP4 (WebM fallback where MP4 can't record). -->
+<div id="animPanel" hidden>
+  <div class="anim-head">
+    <span>🎞 Animate</span>
+    <button class="x" id="animClose" title="Close">×</button>
+  </div>
+  <div class="anim-body">
+    <div id="animEmpty" class="anim-note" hidden>Add a filter block with a slider (e.g. Chroma Shift, 4-Way Collage, Vampire) and connect it, then reopen Animate.</div>
+    <div id="animForm">
+      <div class="anim-row"><label>Block</label><select id="animBlock"></select></div>
+      <div class="anim-row"><label>Parameter</label><select id="animParam"></select></div>
+      <div class="anim-two">
+        <div class="anim-row"><label>From <span id="animFromU" class="u"></span></label><input type="number" id="animFrom" step="any"></div>
+        <div class="anim-row"><label>To <span id="animToU" class="u"></span></label><input type="number" id="animTo" step="any"></div>
+      </div>
+      <div class="anim-two">
+        <div class="anim-row"><label>Frames</label><input type="number" id="animFrames" min="2" max="120" value="30"></div>
+        <div class="anim-row"><label>FPS</label><input type="number" id="animFps" min="1" max="30" value="12"></div>
+      </div>
+      <div class="anim-two">
+        <div class="anim-row"><label>Loop</label><select id="animLoop"><option value="forward">Forward</option><option value="bounce">Bounce (ping-pong)</option><option value="reverse">Reverse</option></select></div>
+        <div class="anim-row"><label>Show output of</label><select id="animWatch"></select></div>
+      </div>
+      <canvas id="animPreview"></canvas>
+      <div id="animStatus" class="anim-note">Set a range, then press Render.</div>
+      <div class="anim-btns">
+        <button class="btn" id="animRender">Render</button>
+        <button class="btn ghost" id="animPlay" disabled>▶ Play</button>
+        <button class="dlbtn" id="animExport" disabled>⬇ MP4</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -1597,6 +1657,130 @@ function defaultGraph(){
   drawWires(); scheduleEval();
 }
 document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGraph(); applyView(); });
+
+/* ------------------------------------------------------------------ */
+/*  Global Animate panel — sweep one parameter of one block through the */
+/*  live graph, preview it, and export MP4 (WebM fallback).            */
+/* ------------------------------------------------------------------ */
+(function(){
+  const $=id=>document.getElementById(id);
+  const panel=$('animPanel'), openBtn=$('openAnim'), closeBtn=$('animClose');
+  const emptyEl=$('animEmpty'), formEl=$('animForm');
+  const blockSel=$('animBlock'), paramSel=$('animParam');
+  const fromIn=$('animFrom'), toIn=$('animTo'), fromU=$('animFromU'), toU=$('animToU');
+  const framesIn=$('animFrames'), fpsIn=$('animFps'), loopSel=$('animLoop'), watchSel=$('animWatch');
+  const prev=$('animPreview'), statusEl=$('animStatus');
+  const renderBtn=$('animRender'), playBtn=$('animPlay'), exportBtn=$('animExport');
+  const MAX_FRAMES=120, MAX_SIDE=720;
+  let frames=[], seq=[], playing=false, timer=null, recording=false, busy=false, playPos=0;
+
+  const rangeParams=node=>NODE_TYPES[node.type].params.filter(p=>p.type==='range');
+  const animatable=()=>Object.values(NODES).filter(n=>rangeParams(n).length>0);
+
+  function populate(){
+    const nodes=animatable();
+    if(!nodes.length){ emptyEl.hidden=false; formEl.hidden=true; return; }
+    emptyEl.hidden=true; formEl.hidden=false;
+    blockSel.innerHTML='';
+    nodes.forEach(n=>{ const o=document.createElement('option'); o.value=n.id; o.textContent=NODE_TYPES[n.type].title; blockSel.appendChild(o); });
+    watchSel.innerHTML='';
+    Object.values(NODES).forEach(n=>{ const o=document.createElement('option'); o.value=n.id; o.textContent=NODE_TYPES[n.type].title+(NODE_TYPES[n.type].preview?' (output)':''); watchSel.appendChild(o); });
+    const pv=Object.values(NODES).find(n=>n.type==='preview');
+    watchSel.value=pv?pv.id:blockSel.value;
+    onBlock();
+  }
+  function onBlock(){ const n=NODES[blockSel.value]; if(!n) return; paramSel.innerHTML='';
+    rangeParams(n).forEach(p=>{ const o=document.createElement('option'); o.value=p.key; o.textContent=p.label; paramSel.appendChild(o); }); onParam(); }
+  function onParam(){ const n=NODES[blockSel.value]; if(!n) return; const pd=rangeParams(n).find(p=>p.key===paramSel.value); if(!pd) return;
+    fromIn.value=pd.min; toIn.value=pd.max; fromIn.step=pd.step||'any'; toIn.step=pd.step||'any';
+    fromU.textContent=pd.suffix||''; toU.textContent=pd.suffix||''; resetFrames('Set a range, then press Render.'); }
+  function resetFrames(msg){ stopPlay(); frames=[]; seq=[]; playBtn.disabled=true; exportBtn.disabled=true; if(msg) statusEl.textContent=msg; }
+  function buildSeq(){ seq=frames.map((_,i)=>i); if(loopSel.value==='reverse') seq.reverse();
+    else if(loopSel.value==='bounce' && frames.length>2){ seq=seq.concat(seq.slice(1,-1).reverse()); } }
+  function fmtNum(v){ return (Math.abs(v)<1 && v!==0)?(+v).toFixed(2):(''+Math.round(v*100)/100); }
+  function syncParamsDOM(node){ if(node.el){ const c=node.el.querySelector('.params'); if(c) buildParams(node,c); } }
+
+  blockSel.addEventListener('change',onBlock);
+  paramSel.addEventListener('change',onParam);
+  [fromIn,toIn,framesIn,fpsIn].forEach(el=>el.addEventListener('change',()=>resetFrames('Settings changed — press Render.')));
+  loopSel.addEventListener('change',()=>{ if(frames.length){ buildSeq(); statusEl.textContent=frames.length+' frames ready.'; } });
+  openBtn.addEventListener('click',()=>{ panel.hidden=false; populate(); });
+  closeBtn.addEventListener('click',()=>{ stopPlay(); panel.hidden=true; });
+
+  function drawFrame(i){ const f=frames[seq[((i%seq.length)+seq.length)%seq.length]]; if(f) prev.getContext('2d').drawImage(f,0,0); }
+  function stopPlay(){ playing=false; if(timer){clearInterval(timer);timer=null;} playBtn.textContent='▶ Play'; }
+  function play(){ if(!frames.length) return; stopPlay(); playing=true; playBtn.textContent='⏸ Pause';
+    const fps=Math.max(1,Math.min(30,parseInt(fpsIn.value,10)||12)); playPos=0;
+    timer=setInterval(()=>{ drawFrame(playPos); playPos=(playPos+1)%seq.length; },1000/fps); }
+  playBtn.addEventListener('click',()=>{ if(!frames.length)return; playing?stopPlay():play(); });
+
+  async function render(){
+    if(busy) return;
+    const node=NODES[blockSel.value], watch=NODES[watchSel.value];
+    if(!node||!watch){ statusEl.textContent='Pick a block and an output.'; return; }
+    const pd=rangeParams(node).find(p=>p.key===paramSel.value); if(!pd) return;
+    const from=parseFloat(fromIn.value), to=parseFloat(toIn.value);
+    const count=Math.max(2,Math.min(MAX_FRAMES,parseInt(framesIn.value,10)||30));
+    const isInt=pd.step>=1 && Number.isInteger(pd.step);
+    const orig=node.params[pd.key];
+    busy=true; renderBtn.disabled=true; resetFrames(''); statusEl.textContent='Rendering…';
+    try{
+      node.params[pd.key]= isInt?Math.round(from):from; await runGraph();
+      let o=watch._out;
+      if(!o){ statusEl.textContent='The “Show output of” block has no image yet — connect an image into it.'; node.params[pd.key]=orig; await runGraph(); return; }
+      let s=Math.min(1,MAX_SIDE/Math.max(o.width,o.height));
+      let fw=Math.round(o.width*s), fh=Math.round(o.height*s); fw-=fw%2; fh-=fh%2; fw=Math.max(2,fw); fh=Math.max(2,fh);
+      frames=[];
+      for(let i=0;i<count;i++){
+        const t=count>1?i/(count-1):0; let v=from+(to-from)*t; if(isInt) v=Math.round(v);
+        node.params[pd.key]=v; await runGraph();
+        const oc=watch._out, fc=newCanvas(fw,fh); if(oc) fc.getContext('2d').drawImage(oc,0,0,fw,fh);
+        frames.push(fc); statusEl.textContent='Rendering '+(i+1)+'/'+count+'…';
+        await new Promise(r=>setTimeout(r,0));
+      }
+      node.params[pd.key]=orig; await runGraph(); syncParamsDOM(node);
+      buildSeq(); prev.width=fw; prev.height=fh; drawFrame(0);
+      playBtn.disabled=false; exportBtn.disabled=false; exportBtn.textContent='⬇ MP4';
+      statusEl.textContent=frames.length+' frames · '+fw+'×'+fh+' · '+pd.label+' '+fmtNum(from)+'→'+fmtNum(to);
+      play();
+    }catch(e){ statusEl.textContent='Render failed: '+((e&&e.message)||e); node.params[pd.key]=orig; try{ await runGraph(); }catch(_){}}
+    finally{ busy=false; renderBtn.disabled=false; }
+  }
+  renderBtn.addEventListener('click',render);
+
+  function pickVideoType(canvas){
+    if(typeof MediaRecorder==='undefined' || typeof canvas.captureStream!=='function') return null;
+    const mp4=['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1.4d002a','video/mp4;codecs=avc1','video/mp4;codecs=h264'];
+    const webm=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    for(const m of mp4) if(MediaRecorder.isTypeSupported(m)) return {mime:m,ext:'mp4'};
+    for(const m of webm) if(MediaRecorder.isTypeSupported(m)) return {mime:m,ext:'webm'};
+    return null;
+  }
+  exportBtn.addEventListener('click',()=>{
+    if(!frames.length||recording) return;
+    const vt=pickVideoType(prev);
+    if(!vt){ const fc=frames[seq[playPos%seq.length]]||frames[0]; download(fc,'avayn0p_anim_frame.png');
+      statusEl.textContent='This browser can’t record video; saved a PNG frame instead.'; return; }
+    stopPlay();
+    const fps=Math.max(1,Math.min(30,parseInt(fpsIn.value,10)||12));
+    let stream,rec;
+    try{ stream=prev.captureStream(fps); rec=new MediaRecorder(stream,{mimeType:vt.mime}); }
+    catch(err){ statusEl.textContent='Couldn’t start recording: '+err.message; return; }
+    const chunks=[];
+    rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+    rec.onstop=()=>{
+      recording=false; exportBtn.disabled=false; exportBtn.textContent='⬇ '+vt.ext.toUpperCase();
+      const blob=new Blob(chunks,{type:vt.mime}), url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='avayn0p_anim.'+vt.ext; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      statusEl.textContent=vt.ext.toUpperCase()+' downloaded · '+frames.length+' frames.'; play();
+    };
+    recording=true; exportBtn.disabled=true; exportBtn.textContent='● Recording…';
+    const frameMs=1000/fps, minFrames=Math.max(seq.length,Math.ceil(fps*1.5)), loops=Math.max(1,Math.ceil(minFrames/seq.length)), total=seq.length*loops;
+    let pos=0; drawFrame(0); rec.start();
+    const iv=setInterval(()=>{ drawFrame(pos); pos++; if(pos>=total){ clearInterval(iv); setTimeout(()=>{ try{ rec.stop(); }catch(_){} }, frameMs+60); } }, frameMs);
+  });
+})();
 
 applyView();
 defaultGraph();
