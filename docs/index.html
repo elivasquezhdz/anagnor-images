@@ -307,25 +307,39 @@ function shareImage(canvas,name){
   }
   if(blob) openImageInTab(blob); else window.open(canvas.toDataURL('image/png'),'_blank');
 }
-// a0p corner watermark, stamped onto every saved image. Preloaded so download()
-// stays synchronous — the iOS share sheet needs the user-gesture activation, which
-// an awaited image load would lose.
-const WATERMARK_IMG=new Image(); WATERMARK_IMG.src='assets/watermark.png';
+// a0p corner watermark, stamped onto every saved image as a colorless "glass /
+// hologram" etch: transparent body, only the edges catch light (a light bevel on
+// one side, a dark bevel on the other) so the mark reads on any background without
+// adding colour. Preloaded so download() stays synchronous — the iOS share sheet
+// needs the user-gesture activation, which an awaited image load would lose.
+const WATERMARK_GLASS=new Image(); WATERMARK_GLASS.src='assets/watermark-glass.png'; // white line-art on transparency
+let _glassDark=null;
+function glassDark(){                     // black-tinted copy of the matte (for the shadow bevel)
+  if(_glassDark) return _glassDark;
+  const w=WATERMARK_GLASS.naturalWidth, h=WATERMARK_GLASS.naturalHeight;
+  const c=newCanvas(w,h), x=c.getContext('2d');
+  x.drawImage(WATERMARK_GLASS,0,0);
+  x.globalCompositeOperation='source-in'; x.fillStyle='#000'; x.fillRect(0,0,w,h); // recolour to black, keep the alpha shape
+  _glassDark=c; return c;
+}
 function watermarked(src){
   try{
-    if(!WATERMARK_IMG.complete || !WATERMARK_IMG.naturalWidth) return src;   // not loaded yet → save as-is
+    if(!WATERMARK_GLASS.complete || !WATERMARK_GLASS.naturalWidth) return src;   // not loaded yet → save as-is
     const W=src.width, H=src.height, short=Math.min(W,H);
     const c=newCanvas(W,H), ctx=c.getContext('2d');
     ctx.drawImage(src,0,0);
-    const size=Math.max(30, Math.min(200, Math.round(short*0.13)));          // super small, ≤200px per side
-    const ar=WATERMARK_IMG.naturalWidth/WATERMARK_IMG.naturalHeight;
+    const size=Math.max(24, Math.min(120, Math.round(short*0.085)));   // small glass mark, ≤120px per side
+    const ar=WATERMARK_GLASS.naturalWidth/WATERMARK_GLASS.naturalHeight;
     let w=size, h=size; if(ar>=1) h=Math.round(size/ar); else w=Math.round(size*ar);
-    const m=Math.max(6, Math.round(short*0.028));                            // margin from the edges
-    ctx.globalAlpha=0.92;
-    ctx.shadowColor='rgba(0,0,0,.55)'; ctx.shadowBlur=Math.max(2,size*0.05); // faint halo so it reads on light photos
-    const spots=[[m,m],[W-w-m,m],[m,H-h-m],[W-w-m,H-h-m]];   // 4 corners
-    for(const [x,y] of spots) ctx.drawImage(WATERMARK_IMG,x,y,w,h);
-    ctx.shadowBlur=0; ctx.globalAlpha=1;
+    const m=Math.max(5, Math.round(short*0.025));            // margin from the edges
+    const o=Math.max(1, size*0.035);                         // bevel offset → the glass "thickness"
+    const dark=glassDark();
+    for(const [x,y] of [[m,m],[W-w-m,m],[m,H-h-m],[W-w-m,H-h-m]]){   // 4 corners
+      ctx.globalAlpha=0.50; ctx.drawImage(dark, x+o, y+o, w, h);            // shadow bevel (down-right)
+      ctx.globalAlpha=0.60; ctx.drawImage(WATERMARK_GLASS, x-o, y-o, w, h); // highlight bevel (up-left)
+      ctx.globalAlpha=0.08; ctx.drawImage(WATERMARK_GLASS, x, y, w, h);     // faint glassy body sheen
+    }
+    ctx.globalAlpha=1;
     return c;
   }catch(e){ return src; }
 }
