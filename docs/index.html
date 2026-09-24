@@ -228,7 +228,9 @@
   .anim-note{color:var(--muted);font-size:.78rem;margin:2px 0 10px}
   .anim-btns{display:flex;gap:8px;align-items:center}
   .anim-btns .btn,.anim-btns .dlbtn{flex:1;padding:9px 8px;font-size:.82rem}
-  .anim-btns .dlbtn{border-radius:9px}
+  .anim-exports{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .anim-exports .dlbtn{flex:1;padding:9px 8px;font-size:.82rem;border-radius:9px}
+  .anim-exports .dlbtn:disabled,.anim-btns .btn:disabled{opacity:.45;cursor:not-allowed}
   @media (max-width:640px){
     .brand{margin-right:0}
     #help{max-width:calc(100% - 32px)}
@@ -300,12 +302,17 @@
       <div class="anim-btns">
         <button class="btn" id="animRender">Render</button>
         <button class="btn ghost" id="animPlay" disabled>▶ Play</button>
+      </div>
+      <div class="anim-exports">
         <button class="dlbtn" id="animExport" disabled>⬇ MP4</button>
+        <button class="dlbtn" id="animGif" disabled>⬇ GIF</button>
+        <button class="dlbtn" id="animPng" disabled>⬇ PNG</button>
       </div>
     </div>
   </div>
 </div>
 
+<script src="vendor/gif.js"></script>
 <script>
 "use strict";
 /* ==================================================================
@@ -1678,7 +1685,9 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
   const fromIn=$('animFrom'), toIn=$('animTo'), fromU=$('animFromU'), toU=$('animToU');
   const framesIn=$('animFrames'), fpsIn=$('animFps'), loopSel=$('animLoop'), watchSel=$('animWatch');
   const prev=$('animPreview'), statusEl=$('animStatus');
-  const renderBtn=$('animRender'), playBtn=$('animPlay'), exportBtn=$('animExport');
+  const renderBtn=$('animRender'), playBtn=$('animPlay');
+  const exportBtn=$('animExport'), gifBtn=$('animGif'), pngBtn=$('animPng');
+  const recCanvas=document.createElement('canvas');   // offscreen: watermarked frames for MP4/GIF export
   const MAX_FRAMES=120, MAX_SIDE=720;
   let frames=[], seq=[], playing=false, timer=null, recording=false, busy=false, playPos=0;
 
@@ -1702,7 +1711,7 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
   function onParam(){ const n=NODES[blockSel.value]; if(!n) return; const pd=rangeParams(n).find(p=>p.key===paramSel.value); if(!pd) return;
     fromIn.value=pd.min; toIn.value=pd.max; fromIn.step=pd.step||'any'; toIn.step=pd.step||'any';
     fromU.textContent=pd.suffix||''; toU.textContent=pd.suffix||''; resetFrames('Set a range, then press Render.'); }
-  function resetFrames(msg){ stopPlay(); frames=[]; seq=[]; playBtn.disabled=true; exportBtn.disabled=true; if(msg) statusEl.textContent=msg; }
+  function resetFrames(msg){ stopPlay(); frames=[]; seq=[]; playBtn.disabled=true; exportBtn.disabled=true; gifBtn.disabled=true; pngBtn.disabled=true; if(msg) statusEl.textContent=msg; }
   function buildSeq(){ seq=frames.map((_,i)=>i); if(loopSel.value==='reverse') seq.reverse();
     else if(loopSel.value==='bounce' && frames.length>2){ seq=seq.concat(seq.slice(1,-1).reverse()); } }
   function fmtNum(v){ return (Math.abs(v)<1 && v!==0)?(+v).toFixed(2):(''+Math.round(v*100)/100); }
@@ -1715,7 +1724,7 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
   openBtn.addEventListener('click',()=>{ panel.hidden=false; populate(); });
   closeBtn.addEventListener('click',()=>{ stopPlay(); panel.hidden=true; });
 
-  function drawFrame(i){ const f=frames[seq[((i%seq.length)+seq.length)%seq.length]]; if(f) prev.getContext('2d').drawImage(f,0,0); }
+  function drawFrame(i){ const f=frames[seq[((i%seq.length)+seq.length)%seq.length]]; if(!f) return; const c=prev.getContext('2d'); c.clearRect(0,0,prev.width,prev.height); c.drawImage(f,0,0); }
   function stopPlay(){ playing=false; if(timer){clearInterval(timer);timer=null;} playBtn.textContent='▶ Play'; }
   function play(){ if(!frames.length) return; stopPlay(); playing=true; playBtn.textContent='⏸ Pause';
     const fps=Math.max(1,Math.min(30,parseInt(fpsIn.value,10)||12)); playPos=0;
@@ -1748,7 +1757,8 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
       }
       node.params[pd.key]=orig; await runGraph(); syncParamsDOM(node);
       buildSeq(); prev.width=fw; prev.height=fh; drawFrame(0);
-      playBtn.disabled=false; exportBtn.disabled=false; exportBtn.textContent='⬇ MP4';
+      playBtn.disabled=false; exportBtn.disabled=false; gifBtn.disabled=false; pngBtn.disabled=false;
+      exportBtn.textContent='⬇ MP4'; gifBtn.textContent='⬇ GIF'; pngBtn.textContent='⬇ PNG';
       statusEl.textContent=frames.length+' frames · '+fw+'×'+fh+' · '+pd.label+' '+fmtNum(from)+'→'+fmtNum(to);
       play();
     }catch(e){ statusEl.textContent='Render failed: '+((e&&e.message)||e); node.params[pd.key]=orig; try{ await runGraph(); }catch(_){}}
@@ -1764,29 +1774,65 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
     for(const m of webm) if(MediaRecorder.isTypeSupported(m)) return {mime:m,ext:'webm'};
     return null;
   }
-  exportBtn.addEventListener('click',()=>{
+  // Exports (MP4 / GIF / PNG) carry the a0p corner watermark; the on-screen
+  // preview stays clean. wmFrame() stamps one frame on demand.
+  function wmFrame(idx){ return watermarked(frames[idx]); }
+  function seqIdx(pos){ return seq[((pos%seq.length)+seq.length)%seq.length]; }
+  function setExporting(on){ recording=on; [renderBtn,playBtn,exportBtn,gifBtn,pngBtn].forEach(b=>{ b.disabled=on; }); }
+
+  exportBtn.addEventListener('click',()=>{            // MP4 (WebM fallback), watermarked
     if(!frames.length||recording) return;
-    const vt=pickVideoType(prev);
-    if(!vt){ const fc=frames[seq[playPos%seq.length]]||frames[0]; download(fc,'avayn0p_anim_frame.png');
-      statusEl.textContent='This browser can’t record video; saved a PNG frame instead.'; return; }
+    const vt=pickVideoType(recCanvas);
+    if(!vt){ download(frames[seqIdx(playPos)]||frames[0],'avayn0p_anim_frame.png');
+      statusEl.textContent='This browser can’t record video; saved a watermarked PNG frame instead.'; return; }
     stopPlay();
     const fps=Math.max(1,Math.min(30,parseInt(fpsIn.value,10)||12));
+    recCanvas.width=prev.width; recCanvas.height=prev.height;
+    const rctx=recCanvas.getContext('2d');
+    const drawRec=pos=>{ const w=wmFrame(seqIdx(pos)); rctx.clearRect(0,0,recCanvas.width,recCanvas.height); rctx.drawImage(w,0,0); };
     let stream,rec;
-    try{ stream=prev.captureStream(fps); rec=new MediaRecorder(stream,{mimeType:vt.mime}); }
+    try{ stream=recCanvas.captureStream(fps); rec=new MediaRecorder(stream,{mimeType:vt.mime}); }
     catch(err){ statusEl.textContent='Couldn’t start recording: '+err.message; return; }
     const chunks=[];
     rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
     rec.onstop=()=>{
-      recording=false; exportBtn.disabled=false; exportBtn.textContent='⬇ '+vt.ext.toUpperCase();
+      setExporting(false); exportBtn.textContent='⬇ '+vt.ext.toUpperCase();
       const blob=new Blob(chunks,{type:vt.mime}), url=URL.createObjectURL(blob);
       const a=document.createElement('a'); a.href=url; a.download='avayn0p_anim.'+vt.ext; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url),60000);
       statusEl.textContent=vt.ext.toUpperCase()+' downloaded · '+frames.length+' frames.'; play();
     };
-    recording=true; exportBtn.disabled=true; exportBtn.textContent='● Recording…';
+    setExporting(true); exportBtn.textContent='● Recording…';
     const frameMs=1000/fps, minFrames=Math.max(seq.length,Math.ceil(fps*1.5)), loops=Math.max(1,Math.ceil(minFrames/seq.length)), total=seq.length*loops;
-    let pos=0; drawFrame(0); rec.start();
-    const iv=setInterval(()=>{ drawFrame(pos); pos++; if(pos>=total){ clearInterval(iv); setTimeout(()=>{ try{ rec.stop(); }catch(_){} }, frameMs+60); } }, frameMs);
+    let pos=0; drawRec(0); rec.start();
+    const iv=setInterval(()=>{ drawRec(pos); pos++; if(pos>=total){ clearInterval(iv); setTimeout(()=>{ try{ rec.stop(); }catch(_){} }, frameMs+60); } }, frameMs);
+  });
+
+  gifBtn.addEventListener('click',()=>{               // animated GIF, watermarked
+    if(!frames.length||recording) return;
+    if(typeof GIF==='undefined'){ statusEl.textContent='GIF encoder not available.'; return; }
+    stopPlay();
+    const fps=Math.max(1,Math.min(30,parseInt(fpsIn.value,10)||12)), delay=Math.max(20,Math.round(1000/fps));
+    let g;
+    try{ g=new GIF({workers:2,quality:10,workerScript:'vendor/gif.worker.js',width:prev.width,height:prev.height}); }
+    catch(err){ statusEl.textContent='GIF failed: '+err.message; return; }
+    setExporting(true); gifBtn.textContent='● 0%';
+    for(const idx of seq) g.addFrame(wmFrame(idx),{delay,copy:true});
+    g.on('progress',p=>{ gifBtn.textContent='● '+Math.round(p*100)+'%'; });
+    g.on('finished',blob=>{
+      setExporting(false); gifBtn.textContent='⬇ GIF';
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='avayn0p_anim.gif'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      statusEl.textContent='GIF downloaded · '+frames.length+' frames.'; play();
+    });
+    statusEl.textContent='Encoding GIF…'; g.render();
+  });
+
+  pngBtn.addEventListener('click',()=>{               // still frame (watermarked by download())
+    if(!frames.length) return;
+    download(frames[seqIdx(playPos)]||frames[0],'avayn0p_anim_frame.png');
+    statusEl.textContent='Watermarked PNG frame saved.';
   });
 })();
 
