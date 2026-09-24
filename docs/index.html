@@ -35,7 +35,9 @@
     color:var(--text);
     line-height:1.5;
     overflow:hidden;
+    display:flex;flex-direction:column;
   }
+  #main{flex:1 1 auto;display:flex;min-height:0;position:relative}
   /* ---- top bar ---- */
   .topbar{
     display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -76,10 +78,28 @@
 
   /* ---- editor canvas ---- */
   #stage{
-    position:absolute;inset:0;top:0;
+    position:relative;flex:1 1 auto;min-width:0;
     overflow:hidden;cursor:grab;touch-action:none;background:transparent;
   }
   #stage.panning{cursor:grabbing}
+  /* ---- fixed preview dock (shows the selected block's result) ---- */
+  #previewDock{
+    flex:0 0 340px;display:flex;flex-direction:column;min-height:0;
+    background:linear-gradient(180deg,#0a0f1b,#070a12);border-left:1px solid var(--border);
+    box-shadow:-6px 0 22px rgba(0,0,0,.4);
+  }
+  .pv-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--border);
+    background:var(--panel-2);font-weight:600;font-size:.9rem}
+  .pv-head .ico{font-size:1rem}
+  .pv-head .pv-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pv-body{flex:1 1 auto;display:flex;flex-direction:column;gap:10px;padding:14px;min-height:0}
+  #pvCanvas{flex:1 1 auto;min-height:0;width:100%;background:#0b0d12;border:1px solid var(--border);
+    border-radius:10px;object-fit:contain}
+  .pv-meta{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .pv-meta .res{color:var(--muted);font-size:.78rem}
+  #pvDownload{padding:8px 14px;font-size:.82rem;border-radius:9px}
+  .pv-hint{color:var(--muted);font-size:.8rem;text-align:center}
+  .pv-err{color:var(--danger);font-size:.8rem;word-break:break-word}
   #watermark{
     position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
     width:min(46vmin,440px);opacity:.06;pointer-events:none;z-index:0;
@@ -114,15 +134,10 @@
     padding:0 2px;line-height:1;border-radius:5px;
   }
   .node .head .x:hover{color:var(--danger)}
+  .node .head .dup{cursor:pointer;color:var(--muted);border:none;background:transparent;font-size:.95rem;
+    padding:0 2px;line-height:1;border-radius:5px}
+  .node .head .dup:hover{color:var(--accent-2)}
   .node .body{padding:9px 10px}
-  .thumbwrap{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px}
-  .thumb{
-    width:100%;max-height:180px;background:#0b0d12;border:1px solid var(--border);
-    border-radius:8px;object-fit:contain;display:block;
-  }
-  .node.preview .thumb{max-height:340px}
-  .thumbmeta{display:flex;justify-content:space-between;width:100%;align-items:center;gap:8px}
-  .thumbmeta .res{color:var(--muted);font-size:.72rem}
   .dlbtn{
     background:var(--accent-2);color:#0b1220;border:none;border-radius:7px;
     padding:4px 9px;font-size:.74rem;font-weight:600;cursor:pointer;
@@ -131,10 +146,9 @@
   .node .err{color:var(--danger);font-size:.74rem;margin-top:6px;word-break:break-word}
   .node .note{color:var(--muted);font-size:.74rem;margin-top:6px}
 
-  /* params (revealed when the node is selected) */
-  .params{display:none;margin-top:10px;border-top:1px dashed var(--border);padding-top:9px;
-    max-height:340px;overflow:auto;overscroll-behavior:contain}
-  .node.selected .params{display:block}
+  /* params — always visible (no collapse) */
+  .params{display:block;max-height:360px;overflow:auto;overscroll-behavior:contain}
+  .params:not(:empty){margin-top:8px;border-top:1px dashed var(--border);padding-top:9px}
   .p-row{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
   .p-row label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;
     display:flex;justify-content:space-between;gap:8px}
@@ -231,10 +245,12 @@
   .anim-exports{display:flex;gap:8px;align-items:center;margin-top:8px}
   .anim-exports .dlbtn{flex:1;padding:9px 8px;font-size:.82rem;border-radius:9px}
   .anim-exports .dlbtn:disabled,.anim-btns .btn:disabled{opacity:.45;cursor:not-allowed}
-  @media (max-width:640px){
+  @media (max-width:760px){
     .brand{margin-right:0}
     #help{max-width:calc(100% - 32px)}
     #animPanel{right:8px;left:8px;width:auto;top:56px}
+    #main{flex-direction:column}
+    #previewDock{flex:0 0 42vh;border-left:none;border-top:1px solid var(--border);box-shadow:0 -6px 22px rgba(0,0,0,.4)}
   }
 </style>
 </head>
@@ -250,10 +266,13 @@
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="zoomFit" title="Reset view" style="width:auto;padding:0 10px;font-size:.8rem">Reset&nbsp;view</button>
   </div>
+  <button class="btn ghost" id="exportJson" title="Download the operations as a JSON file">⬇ JSON</button>
+  <button class="btn ghost" id="exportZip" title="Download a ZIP: original image + operations + results">⬇ ZIP</button>
   <button class="btn" id="openAnim">🎞 Animate</button>
   <button class="btn ghost" id="resetGraph">Reset graph</button>
 </div>
 
+<div id="main">
 <div id="stage">
   <img id="watermark" src="assets/logo-mark.png" alt="">
   <canvas id="grid"></canvas>
@@ -265,12 +284,24 @@
     <button class="close" id="helpClose" title="Dismiss">×</button>
     <b>How it works.</b> Tap a block in the top bar to drop it on the canvas (or drag it).
     <b>To connect:</b> tap a block's <b>right</b> dot, then tap the target block —
-    on a computer you can also just drag between the dots. <b>Tap a block</b> to reveal its
-    parameters. Drag the empty canvas to pan, pinch or scroll to zoom, tap a wire to remove it.
-    Every block previews its own output — download a PNG from any one.
+    on a computer you can also just drag between the dots. <b>Tap a block</b> to see its result in the
+    right-side preview (download it there). Its controls stay visible on the box. Drag the empty canvas to
+    pan, pinch or scroll to zoom, tap a wire to remove it. Use <b>⧉</b> to duplicate a block, and
+    <b>⬇ JSON / ⬇ ZIP</b> up top to export your project.
   </div>
   <div id="toast"></div>
 </div>
+<aside id="previewDock">
+  <div class="pv-head"><span class="ico" id="pvIcon">👁️</span><span class="pv-name" id="pvName">Preview</span></div>
+  <div class="pv-body">
+    <canvas id="pvCanvas"></canvas>
+    <div class="pv-err" id="pvErr" hidden></div>
+    <div class="pv-hint" id="pvHint">Select a block to preview its result here.</div>
+    <div class="pv-meta"><span class="res" id="pvRes">—</span><button class="dlbtn" id="pvDownload" disabled>⬇ PNG</button></div>
+  </div>
+</aside>
+</div>
+
 <div id="ghost" class="chip act" hidden></div>
 
 <!-- Global Animate panel: sweep one parameter of one block through the live
@@ -1088,14 +1119,10 @@ const NODE_TYPES={
     ],
     process(inputs,p){ return ChannelFx.merge(inputs,[+p.s1,+p.s2,+p.s3,+p.s4,+p.s5,+p.s6],p.fit); }
   },
-  preview:{
-    title:'Preview', icon:'👁️', inputs:['Image'], preview:true, params:[],
-    process(inputs){ return inputs[0]||null; }
-  },
 };
 
 // Order the palette buttons.
-const PALETTE=['source','chroma','fill','collage','vampire','fgbg','boxes','channel','preview'];
+const PALETTE=['source','chroma','fill','collage','vampire','fgbg','boxes','channel'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -1120,6 +1147,15 @@ function makeNode(type,x,y){
   return node;
 }
 function addNode(type,x,y){ const n=makeNode(type,x,y); NODES[n.id]=n; renderNode(n); return n; }
+function duplicateNode(id){
+  const n=NODES[id]; if(!n) return;
+  const copy=addNode(n.type, n.x+30, n.y+30);
+  copy.params=JSON.parse(JSON.stringify(n.params));          // copy all settings
+  if(n.type==='source' && n.image){ copy.image=cloneCanvas(n.image); copy.imageName=n.imageName; copy._imgId='dup'+(++nodeSeq); }
+  const c=copy.el.querySelector('.params'); if(c) buildParams(copy,c);   // reflect copied values
+  if(copy.type==='source'){ const fn=copy.el.querySelector('.fname'); if(fn) fn.textContent=copy.image?(copy.imageName||'image'):'Using a sample image'; }
+  selectNode(copy.id); scheduleEval();
+}
 function removeNode(id){
   const n=NODES[id]; if(!n) return;
   if(armed) clearArmed();
@@ -1157,10 +1193,13 @@ function renderNode(node){
   // head
   const head=document.createElement('div'); head.className='head';
   head.innerHTML='<span class="ico">'+t.icon+'</span><span class="ttl">'+t.title+'</span>';
+  const dup=document.createElement('button'); dup.className='dup'; dup.textContent='⧉'; dup.title='Duplicate block';
+  dup.addEventListener('pointerdown',e=>e.stopPropagation());
+  dup.addEventListener('click',e=>{ e.stopPropagation(); duplicateNode(node.id); });
   const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='Delete block';
   x.addEventListener('pointerdown',e=>e.stopPropagation());
   x.addEventListener('click',e=>{ e.stopPropagation(); removeNode(node.id); });
-  head.appendChild(x);
+  head.appendChild(dup); head.appendChild(x);
   el.appendChild(head);
 
   // body
@@ -1188,18 +1227,6 @@ function renderNode(node){
     body.appendChild(label); body.appendChild(fname);
   }
 
-  // thumbnail + download
-  const tw=document.createElement('div'); tw.className='thumbwrap';
-  const thumb=document.createElement('canvas'); thumb.className='thumb'; thumb.width=210; thumb.height=140;
-  const meta=document.createElement('div'); meta.className='thumbmeta';
-  const res=document.createElement('span'); res.className='res'; res.textContent='—';
-  const dl=document.createElement('button'); dl.className='dlbtn'; dl.textContent='⬇ PNG'; dl.disabled=true;
-  dl.addEventListener('pointerdown',e=>e.stopPropagation());
-  dl.addEventListener('click',e=>{ e.stopPropagation(); if(node._out) download(node._out,(node.imageName||NODE_TYPES[node.type].title.replace(/[^\w]+/g,'_').toLowerCase())+'.png'); });
-  meta.appendChild(res); meta.appendChild(dl);
-  tw.appendChild(thumb); tw.appendChild(meta);
-  body.appendChild(tw);
-
   const err=document.createElement('div'); err.className='err'; err.hidden=true; body.appendChild(err);
 
   // params
@@ -1221,10 +1248,12 @@ function renderNode(node){
     el.appendChild(outp);
   }
 
-  node.el=el; node.thumb=thumb; node._res=res; node._dl=dl; node._err=err;
+  node.el=el; node._err=err;
   world.appendChild(el);
   positionInPorts(node);
   wireNodeInteractions(node);
+  // Select on any interaction (capture phase) so the right-side preview follows.
+  el.addEventListener('pointerdown',()=>selectNode(node.id), true);
 }
 
 // Distribute input ports vertically along the left edge.
@@ -1300,10 +1329,8 @@ function refreshParamVisibility(node){
 function selectNode(id){
   selectedId=id;
   Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===id); });
-  if(id){ const n=NODES[id]; if(n&&n.el) world.appendChild(n.el); }   // bring to front
-  // Selecting expands one node and collapses another, changing heights — so
-  // reflow every node's ports and redraw the wires once layout settles.
-  requestAnimationFrame(()=>{ Object.values(NODES).forEach(positionInPorts); drawWires(); });
+  if(id){ const n=NODES[id]; if(n&&n.el) world.appendChild(n.el); drawWires(); }   // bring to front
+  refreshPreview();   // the fixed dock shows the selected block's output
 }
 
 /* ------------------------------------------------------------------ */
@@ -1476,33 +1503,53 @@ async function runGraph(){
   if(myGen!==evalGen) return;
   ids.forEach(id=>paintNode(NODES[id]));
   drawWires();
+  refreshPreview();
 }
 function paintNode(node){
-  if(!node.thumb) return;
-  const out=node._out, thumb=node.thumb, ctx=thumb.getContext('2d');
-  // error
-  if(node._err){ node._err.hidden=!node.error; node._err.textContent=node.error||''; }
-  if(!out){
-    thumb.width=210; thumb.height=node.type==='source'?90:120;
-    ctx.clearRect(0,0,thumb.width,thumb.height);
-    ctx.fillStyle='#0b0d12'; ctx.fillRect(0,0,thumb.width,thumb.height);
-    ctx.fillStyle='#5a6472'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(node.type==='source'?'no image':(node.error?'error':'connect an input'), thumb.width/2, thumb.height/2);
-    if(node._res) node._res.textContent='—';
-    if(node._dl) node._dl.disabled=true;
-    positionInPorts(node);
-    return;
-  }
-  const maxW=NODE_TYPES[node.type].preview?320:210;
-  const maxH=NODE_TYPES[node.type].preview?340:180;
-  const s=Math.min(maxW/out.width, maxH/out.height, 1);
-  const dw=Math.max(1,Math.round(out.width*s)), dh=Math.max(1,Math.round(out.height*s));
-  thumb.width=dw; thumb.height=dh;
-  ctx.clearRect(0,0,dw,dh); ctx.drawImage(out,0,0,dw,dh);
-  if(node._res) node._res.textContent=out.width+'×'+out.height;
-  if(node._dl) node._dl.disabled=false;
-  positionInPorts(node);
+  if(!node.el) return;
+  if(node._err){ node._err.hidden=!node.error; node._err.textContent=node.error||''; }  // show any error
+  positionInPorts(node);                          // error text can change the node height
+  if(node.id===selectedId) refreshPreview();      // the fixed dock shows the selected block's output
 }
+
+/* ------------------------------------------------------------------ */
+/*  Fixed preview dock — shows the selected block's result            */
+/* ------------------------------------------------------------------ */
+const pvCanvas=document.getElementById('pvCanvas'), pvName=document.getElementById('pvName'),
+      pvIcon=document.getElementById('pvIcon'), pvRes=document.getElementById('pvRes'),
+      pvHint=document.getElementById('pvHint'), pvErr=document.getElementById('pvErr'),
+      pvDownload=document.getElementById('pvDownload');
+function refreshPreview(){
+  const node=selectedId?NODES[selectedId]:null;
+  const ctx=pvCanvas.getContext('2d');
+  if(!node){ pvName.textContent='Preview'; pvIcon.textContent='👁️'; pvRes.textContent='—';
+    pvHint.hidden=false; pvHint.textContent='Select a block to preview its result here.';
+    pvErr.hidden=true; pvDownload.disabled=true; ctx.clearRect(0,0,pvCanvas.width,pvCanvas.height); return; }
+  const t=NODE_TYPES[node.type];
+  pvName.textContent=t.title; pvIcon.textContent=t.icon;
+  pvErr.hidden=!node.error; pvErr.textContent=node.error||'';
+  const out=node._out;
+  if(!out){
+    pvRes.textContent='—'; pvDownload.disabled=true; pvHint.hidden=false;
+    pvHint.textContent=node.error?'This block errored.':(node.type==='source'?'No image loaded.':'Connect an image into this block.');
+    ctx.clearRect(0,0,pvCanvas.width,pvCanvas.height); return;
+  }
+  pvHint.hidden=true; pvRes.textContent=out.width+'×'+out.height; pvDownload.disabled=false;
+  // Fit the output into the dock canvas at its displayed size.
+  const box=pvCanvas.getBoundingClientRect();
+  const cw=Math.max(80,Math.round(box.width)), ch=Math.max(80,Math.round(box.height||cw*out.height/out.width));
+  if(pvCanvas.width!==cw||pvCanvas.height!==ch){ pvCanvas.width=cw; pvCanvas.height=ch; }
+  ctx.clearRect(0,0,cw,ch);
+  const s=Math.min(cw/out.width, ch/out.height);
+  const dw=Math.round(out.width*s), dh=Math.round(out.height*s);
+  ctx.drawImage(out,(cw-dw)/2,(ch-dh)/2,dw,dh);
+}
+pvDownload.addEventListener('click',()=>{
+  const node=selectedId?NODES[selectedId]:null; if(!node||!node._out) return;
+  const base=node.type==='source'?(node.imageName||'image'):NODE_TYPES[node.type].title.replace(/[^\w]+/g,'_').toLowerCase();
+  download(node._out, base+'.png');
+});
+window.addEventListener('resize',()=>{ if(selectedId) refreshPreview(); });
 
 /* ------------------------------------------------------------------ */
 /*  Sample image so previews render before any upload                  */
@@ -1665,13 +1712,77 @@ function defaultGraph(){
   clearGraph();
   const src=addNode('source',40,150);
   src.image=makeSampleImage(); src._imgId='sample'; src.imageName='sample';
-  const chroma=addNode('chroma',350,150);
-  const prev=addNode('preview',680,120);
+  const chroma=addNode('chroma',360,150);
   chroma.inputs[0]=src.id;
-  prev.inputs[0]=chroma.id;
-  drawWires(); scheduleEval();
+  drawWires(); selectNode(chroma.id); scheduleEval();
 }
 document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGraph(); applyView(); });
+
+/* ------------------------------------------------------------------ */
+/*  Project export — JSON recipe + ZIP (originals + operations + results) */
+/* ------------------------------------------------------------------ */
+function serializeGraph(){
+  return {
+    app:'avayn0p', kind:'anagnor-project', version:1, exported:new Date().toISOString(),
+    view:{ x:Math.round(view.x), y:Math.round(view.y), scale:+view.scale.toFixed(3) },
+    nodes:Object.values(NODES).map(n=>({
+      id:n.id, type:n.type, title:NODE_TYPES[n.type].title,
+      x:Math.round(n.x), y:Math.round(n.y),
+      params:{...n.params},
+      inputs:n.inputs.slice(),                          // source-node ids per input port
+      source: n.type==='source' ? { name:n.imageName||'sample', sample:n._imgId==='sample',
+        width:n.image?n.image.width:null, height:n.image?n.image.height:null } : undefined
+    }))
+  };
+}
+function saveBlob(blob,name){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000); }
+function canvasToPngBytes(canvas){ const u=canvas.toDataURL('image/png'); const bin=atob(u.slice(u.indexOf(',')+1)); const b=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) b[i]=bin.charCodeAt(i); return b; }
+// Minimal store-only ZIP writer (no compression — PNGs are already compressed).
+const _CRC=(()=>{ const t=new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; } return t; })();
+function crc32(buf){ let c=0xFFFFFFFF; for(let i=0;i<buf.length;i++) c=_CRC[(c^buf[i])&0xFF]^(c>>>8); return (c^0xFFFFFFFF)>>>0; }
+function makeZip(files){
+  const enc=new TextEncoder(), parts=[], central=[]; let offset=0;
+  const u16=n=>[n&255,(n>>>8)&255], u32=n=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];
+  for(const f of files){
+    const name=enc.encode(f.name), data=f.bytes, crc=crc32(data), n=data.length;
+    const lh=Uint8Array.from([...u32(0x04034b50),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(n),...u32(n),...u16(name.length),...u16(0)]);
+    parts.push(lh,name,data);
+    central.push(Uint8Array.from([...u32(0x02014b50),...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(n),...u32(n),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset),...name]));
+    offset += lh.length+name.length+n;
+  }
+  let cdSize=0; central.forEach(c=>cdSize+=c.length);
+  const eocd=Uint8Array.from([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdSize),...u32(offset),...u16(0)]);
+  return new Blob([...parts,...central,eocd],{type:'application/zip'});
+}
+const safe=s=>String(s||'').replace(/[^\w.-]+/g,'_').slice(0,60)||'x';
+
+document.getElementById('exportJson').addEventListener('click',()=>{
+  saveBlob(new Blob([JSON.stringify(serializeGraph(),null,2)],{type:'application/json'}), 'avayn0p-project.json');
+  toast('Saved project JSON.');
+});
+document.getElementById('exportZip').addEventListener('click',async ()=>{
+  const btn=document.getElementById('exportZip'); if(btn.disabled) return; btn.disabled=true; const label=btn.textContent; btn.textContent='…';
+  try{
+    await runGraph();                                   // fresh outputs
+    const enc=new TextEncoder(), files=[], used={};
+    files.push({name:'project.json', bytes:enc.encode(JSON.stringify(serializeGraph(),null,2))});
+    Object.values(NODES).forEach(n=>{                    // originals (un-watermarked)
+      if(n.type==='source' && n.image){ let f='sources/'+safe(n.imageName||'source')+'.png', i=2; while(used[f]){ f='sources/'+safe(n.imageName||'source')+'_'+(i++)+'.png'; } used[f]=1; files.push({name:f, bytes:canvasToPngBytes(n.image)}); }
+    });
+    Object.values(NODES).forEach(n=>{                    // results (watermarked, like a normal save)
+      if(n._out){ const f='results/'+safe(NODE_TYPES[n.type].title)+'_'+n.id+'.png'; files.push({name:f, bytes:canvasToPngBytes(watermarked(n._out))}); }
+    });
+    files.push({name:'README.txt', bytes:enc.encode(
+      'avayn0p project export\n\n'+
+      'project.json  the graph: blocks, parameters and connections\n'+
+      'sources/      your original image(s)\n'+
+      'results/      each block\'s rendered output (watermarked)\n\n'+
+      'Made with avayn0p — https://elivasquezhdz.github.io/anagnor-images/\n')});
+    saveBlob(makeZip(files),'avayn0p-project.zip');
+    toast('ZIP downloaded ('+files.length+' files).');
+  }catch(e){ toast('ZIP failed: '+((e&&e.message)||e)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+});
 
 /* ------------------------------------------------------------------ */
 /*  Global Animate panel — sweep one parameter of one block through the */
@@ -1701,9 +1812,8 @@ document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGrap
     blockSel.innerHTML='';
     nodes.forEach(n=>{ const o=document.createElement('option'); o.value=n.id; o.textContent=NODE_TYPES[n.type].title; blockSel.appendChild(o); });
     watchSel.innerHTML='';
-    Object.values(NODES).forEach(n=>{ const o=document.createElement('option'); o.value=n.id; o.textContent=NODE_TYPES[n.type].title+(NODE_TYPES[n.type].preview?' (output)':''); watchSel.appendChild(o); });
-    const pv=Object.values(NODES).find(n=>n.type==='preview');
-    watchSel.value=pv?pv.id:blockSel.value;
+    Object.values(NODES).forEach(n=>{ const o=document.createElement('option'); o.value=n.id; o.textContent=NODE_TYPES[n.type].title; watchSel.appendChild(o); });
+    watchSel.value=(selectedId && NODES[selectedId])?selectedId:blockSel.value;
     onBlock();
   }
   function onBlock(){ const n=NODES[blockSel.value]; if(!n) return; paramSel.innerHTML='';
