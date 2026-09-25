@@ -266,8 +266,10 @@
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="zoomFit" title="Reset view" style="width:auto;padding:0 10px;font-size:.8rem">Reset&nbsp;view</button>
   </div>
+  <button class="btn ghost" id="importBtn" title="Open a saved project (.json or .zip)">⬆ Open</button>
   <button class="btn ghost" id="exportJson" title="Download the operations as a JSON file">⬇ JSON</button>
   <button class="btn ghost" id="exportZip" title="Download a ZIP: original image + operations + results">⬇ ZIP</button>
+  <input type="file" id="importFile" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" hidden>
   <button class="btn" id="openAnim">🎞 Animate</button>
   <button class="btn ghost" id="resetGraph">Reset graph</button>
 </div>
@@ -1765,10 +1767,13 @@ document.getElementById('exportZip').addEventListener('click',async ()=>{
   try{
     await runGraph();                                   // fresh outputs
     const enc=new TextEncoder(), files=[], used={};
-    files.push({name:'project.json', bytes:enc.encode(JSON.stringify(serializeGraph(),null,2))});
-    Object.values(NODES).forEach(n=>{                    // originals (un-watermarked)
-      if(n.type==='source' && n.image){ let f='sources/'+safe(n.imageName||'source')+'.png', i=2; while(used[f]){ f='sources/'+safe(n.imageName||'source')+'_'+(i++)+'.png'; } used[f]=1; files.push({name:f, bytes:canvasToPngBytes(n.image)}); }
+    const g=serializeGraph(), nodeById={}; g.nodes.forEach(nd=>nodeById[nd.id]=nd);
+    Object.values(NODES).forEach(n=>{                    // originals (un-watermarked) + record filename in the recipe
+      if(n.type==='source' && n.image){ let base='sources/'+safe(n.imageName||'source'), f=base+'.png', i=2; while(used[f]){ f=base+'_'+(i++)+'.png'; } used[f]=1;
+        if(nodeById[n.id] && nodeById[n.id].source) nodeById[n.id].source.file=f;
+        files.push({name:f, bytes:canvasToPngBytes(n.image)}); }
     });
+    files.push({name:'project.json', bytes:enc.encode(JSON.stringify(g,null,2))});
     Object.values(NODES).forEach(n=>{                    // results (watermarked, like a normal save)
       if(n._out){ const f='results/'+safe(NODE_TYPES[n.type].title)+'_'+n.id+'.png'; files.push({name:f, bytes:canvasToPngBytes(watermarked(n._out))}); }
     });
@@ -1782,6 +1787,71 @@ document.getElementById('exportZip').addEventListener('click',async ()=>{
     toast('ZIP downloaded ('+files.length+' files).');
   }catch(e){ toast('ZIP failed: '+((e&&e.message)||e)); }
   finally{ btn.disabled=false; btn.textContent=label; }
+});
+
+/* ---- Open / import a saved project (.json or .zip) ---- */
+async function inflateRaw(bytes){
+  if(typeof DecompressionStream==='undefined') throw new Error('this browser can’t read compressed ZIPs');
+  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function readZip(buf){                              // central-directory reader; store + deflate
+  const dv=new DataView(buf), u8=new Uint8Array(buf), map=new Map();
+  let eo=-1; for(let i=u8.length-22;i>=0 && i>u8.length-22-66000;i--){ if(dv.getUint32(i,true)===0x06054b50){ eo=i; break; } }
+  if(eo<0) throw new Error('not a ZIP file');
+  const count=dv.getUint16(eo+10,true); let p=dv.getUint32(eo+16,true);
+  for(let n=0;n<count;n++){
+    if(dv.getUint32(p,true)!==0x02014b50) break;
+    const method=dv.getUint16(p+10,true), compSize=dv.getUint32(p+20,true);
+    const nameLen=dv.getUint16(p+28,true), extraLen=dv.getUint16(p+30,true), commLen=dv.getUint16(p+32,true), lho=dv.getUint32(p+42,true);
+    const name=new TextDecoder().decode(u8.subarray(p+46,p+46+nameLen));
+    const lNameLen=dv.getUint16(lho+26,true), lExtra=dv.getUint16(lho+28,true), dataStart=lho+30+lNameLen+lExtra;
+    const comp=u8.subarray(dataStart,dataStart+compSize);
+    map.set(name, method===0?comp:(method===8?await inflateRaw(comp):null));
+    p+=46+nameLen+extraLen+commLen;
+  }
+  return map;
+}
+async function loadProject(data, sources){
+  if(!data || !Array.isArray(data.nodes)) throw new Error('not an avayn0p project');
+  clearGraph();
+  if(data.view && typeof data.view.scale==='number'){ view.x=+data.view.x||0; view.y=+data.view.y||0; view.scale=Math.max(0.3,Math.min(2.2,+data.view.scale||1)); }
+  const idMap={};
+  for(const nd of data.nodes){
+    if(!nd || !NODE_TYPES[nd.type]) continue;            // skip unknown / removed types
+    const n=addNode(nd.type, +nd.x||0, +nd.y||0); idMap[nd.id]=n.id;
+    if(nd.params) n.params=Object.assign({}, n.params, nd.params);
+    const c=n.el.querySelector('.params'); if(c) buildParams(n,c);
+    if(nd.type==='source'){
+      const fn=n.el.querySelector('.fname');
+      if(sources && nd.source && nd.source.file && sources.get(nd.source.file)){
+        try{ const img=await loadImage(new Blob([sources.get(nd.source.file)],{type:'image/png'}));
+          n.image=scaleToMax(cloneCanvas(img),1600); n.imageName=nd.source.name||'image'; n._imgId='imp'+(++nodeSeq);
+          if(fn) fn.textContent=n.imageName; }catch(_){}
+      } else if(nd.source && nd.source.sample){ n.image=makeSampleImage(); n._imgId='sample'; n.imageName='sample'; if(fn) fn.textContent='Using a sample image'; }
+      else { n.image=null; if(fn) fn.textContent='Re-upload '+((nd.source&&nd.source.name)||'image'); }
+    }
+  }
+  for(const nd of data.nodes){ const nid=idMap[nd.id]; if(!nid) continue; const n=NODES[nid];
+    (nd.inputs||[]).forEach((src,idx)=>{ if(src!=null && idMap[src] && idx<n.inputs.length) n.inputs[idx]=idMap[src]; }); }
+  drawWires(); applyView();
+  const first=Object.keys(NODES)[0]; if(first) selectNode(first);
+  scheduleEval();
+}
+const importFile=document.getElementById('importFile');
+document.getElementById('importBtn').addEventListener('click',()=>importFile.click());
+importFile.addEventListener('change',async e=>{
+  const f=e.target.files[0]; if(!f) return; importFile.value='';
+  try{
+    if(/\.zip$/i.test(f.name) || (f.type||'').includes('zip')){
+      const map=await readZip(await f.arrayBuffer());
+      const pj=map.get('project.json'); if(!pj) throw new Error('no project.json in the ZIP');
+      await loadProject(JSON.parse(new TextDecoder().decode(pj)), map);
+    } else {
+      await loadProject(JSON.parse(await f.text()), null);
+    }
+    toast('Project loaded.');
+  }catch(err){ toast('Couldn’t open: '+((err&&err.message)||err)); }
 });
 
 /* ------------------------------------------------------------------ */
