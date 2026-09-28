@@ -1132,6 +1132,7 @@ const PALETTE=['source','chroma','fill','collage','vampire','fgbg','boxes','chan
 let NODES={};           // id -> node
 let nodeSeq=0;
 let selectedId=null;
+let zTop=10;             // running z-index for bring-to-front (no DOM re-parenting)
 let view={x:60,y:20,scale:1};
 let evalGen=0;
 let evalScheduled=false;
@@ -1190,7 +1191,7 @@ function renderNode(node){
   const el=document.createElement('div');
   el.className='node'+(t.preview?' preview':'');
   el.dataset.id=node.id;
-  el.style.left=node.x+'px'; el.style.top=node.y+'px';
+  el.style.left=node.x+'px'; el.style.top=node.y+'px'; el.style.zIndex=++zTop;
 
   // head
   const head=document.createElement('div'); head.className='head';
@@ -1331,7 +1332,10 @@ function refreshParamVisibility(node){
 function selectNode(id){
   selectedId=id;
   Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===id); });
-  if(id){ const n=NODES[id]; if(n&&n.el) world.appendChild(n.el); drawWires(); }   // bring to front
+  // Bring to front via z-index — NOT by re-appending the DOM node: moving the
+  // element during a pointerdown cancels the click on its buttons (× / upload).
+  if(id){ const n=NODES[id]; if(n&&n.el) n.el.style.zIndex=++zTop; }
+  drawWires();
   refreshPreview();   // the fixed dock shows the selected block's output
 }
 
