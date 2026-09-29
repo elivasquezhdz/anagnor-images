@@ -84,7 +84,7 @@
   #stage.panning{cursor:grabbing}
   /* ---- fixed preview dock (shows the selected block's result) ---- */
   #previewDock{
-    flex:0 0 340px;display:flex;flex-direction:column;min-height:0;
+    flex:0 0 320px;display:flex;flex-direction:column;min-height:0;
     background:linear-gradient(180deg,#0a0f1b,#070a12);border-left:1px solid var(--border);
     box-shadow:-6px 0 22px rgba(0,0,0,.4);
   }
@@ -122,7 +122,7 @@
   }
   .node.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 20px rgba(63,155,255,.28),0 10px 30px rgba(0,0,0,.55)}
   .node .head{
-    display:flex;align-items:center;gap:7px;
+    display:flex;align-items:center;gap:7px;position:relative;z-index:2;
     padding:8px 10px;cursor:grab;border-bottom:1px solid var(--border);
     border-radius:12px 12px 0 0;background:var(--panel-2);
   }
@@ -137,7 +137,7 @@
   .node .head .dup{cursor:pointer;color:var(--muted);border:none;background:transparent;font-size:.95rem;
     padding:0 2px;line-height:1;border-radius:5px}
   .node .head .dup:hover{color:var(--accent-2)}
-  .node .body{padding:9px 10px}
+  .node .body{padding:9px 10px;position:relative;z-index:2}
   .dlbtn{
     background:var(--accent-2);color:#0b1220;border:none;border-radius:7px;
     padding:4px 9px;font-size:.74rem;font-weight:600;cursor:pointer;
@@ -172,7 +172,7 @@
   /* ports */
   .port{
     position:absolute;width:15px;height:15px;border-radius:50%;
-    background:var(--panel-3);border:2px solid var(--border-2);cursor:crosshair;z-index:3;
+    background:var(--panel-3);border:2px solid var(--border-2);cursor:crosshair;z-index:1;
     touch-action:none;
   }
   .port::before{content:"";position:absolute;inset:-12px;border-radius:50%}  /* enlarge the touch/click target */
@@ -188,7 +188,7 @@
   /* connect mode: every input dot becomes a big glowing tap target */
   #stage.connecting .port.in{
     width:22px;height:22px;left:-12px;border-color:var(--accent-2);background:var(--accent-2);
-    box-shadow:0 0 0 6px rgba(121,212,255,.14),0 0 14px rgba(121,212,255,.9);z-index:6;
+    box-shadow:0 0 0 6px rgba(121,212,255,.14),0 0 14px rgba(121,212,255,.9);z-index:20;
   }
   @media (pointer:coarse){
     .port{width:20px;height:20px}
@@ -245,7 +245,7 @@
   .anim-exports{display:flex;gap:8px;align-items:center;margin-top:8px}
   .anim-exports .dlbtn{flex:1;padding:9px 8px;font-size:.82rem;border-radius:9px}
   .anim-exports .dlbtn:disabled,.anim-btns .btn:disabled{opacity:.45;cursor:not-allowed}
-  @media (max-width:760px){
+  @media (max-width:1000px){
     .brand{margin-right:0}
     #help{max-width:calc(100% - 32px)}
     #animPanel{right:8px;left:8px;width:auto;top:56px}
