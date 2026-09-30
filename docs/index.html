@@ -1451,13 +1451,13 @@ function wireNodeInteractions(node){
     if(e.button!=null && e.button!==0) return;
     const wasArmed=armed;                 // armed before this press → a tap here means "connect to me"
     selectNode(node.id);
+    const sx=e.clientX, sy=e.clientY;                 // screen-space start (zoom-independent tap test)
     const start=screenToWorld(e.clientX,e.clientY);
     const ox=node.x, oy=node.y;
     let moved=false;
     function move(ev){
-      const w=screenToWorld(ev.clientX,ev.clientY);
-      if(!moved && Math.hypot(w.x-start.x,w.y-start.y) > 3/view.scale) moved=true;   // ignore finger jitter
-      if(moved){ node.x=ox+(w.x-start.x); node.y=oy+(w.y-start.y); node.el.style.left=node.x+'px'; node.el.style.top=node.y+'px'; drawWires(); }
+      if(!moved && Math.hypot(ev.clientX-sx, ev.clientY-sy) > 8) moved=true;   // 8px screen = a drag, not a tap (jitter-proof at any zoom)
+      if(moved){ const w=screenToWorld(ev.clientX,ev.clientY); node.x=ox+(w.x-start.x); node.y=oy+(w.y-start.y); node.el.style.left=node.x+'px'; node.el.style.top=node.y+'px'; drawWires(); }
     }
     function up(){
       document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
