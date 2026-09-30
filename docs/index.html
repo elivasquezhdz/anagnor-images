@@ -1509,14 +1509,20 @@ function refreshParamVisibility(node){
 /* ------------------------------------------------------------------ */
 /*  Selection                                                          */
 /* ------------------------------------------------------------------ */
+let _pvRaf=0;
 function selectNode(id){
   selectedId=id;
   Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===id); });
   // Bring to front via z-index — NOT by re-appending the DOM node: moving the
   // element during a pointerdown cancels the click on its buttons (× / upload).
   if(id){ const n=NODES[id]; if(n&&n.el) n.el.style.zIndex=++zTop; }
-  drawWires();
-  refreshPreview();   // the fixed dock shows the selected block's output
+  // selectNode runs on the capture-phase pointerdown of EVERY node interaction.
+  // Do NOT redraw wires here: adding/removing the SVG <path>s mutates the DOM
+  // mid-pointerdown, which makes iOS Safari cancel the tap — so on a CONNECTED
+  // block (where there are wires to rebuild) every control tap (× / ⧉ / combo /
+  // upload) was being swallowed. Wires don't move on selection, so there's
+  // nothing to redraw. Defer the preview repaint off the pointerdown too.
+  cancelAnimationFrame(_pvRaf); _pvRaf=requestAnimationFrame(refreshPreview);
 }
 
 /* ------------------------------------------------------------------ */
