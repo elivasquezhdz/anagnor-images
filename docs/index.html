@@ -108,10 +108,20 @@
   #grid{position:absolute;inset:0;pointer-events:none;opacity:.6;z-index:0}
   #world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
   #wires{position:absolute;left:0;top:0;overflow:visible;width:10px;height:10px;pointer-events:none}
-  #wires{filter:drop-shadow(0 0 2.5px var(--glow))}
-  #wires path.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.9;pointer-events:stroke;cursor:pointer}
+  /* No filter on the #wires container: a filtered SVG layer with overflowing
+     content is mis-hit-tested by iOS Safari and captures taps over the connected
+     blocks. The per-wire glow lives on the path (a layer confined to the thin
+     wire), and is dropped entirely on touch below. */
+  #wires path.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.9;pointer-events:stroke;cursor:pointer;
+    filter:drop-shadow(0 0 2px var(--glow))}
   #wires path.wire:hover{stroke:var(--danger);opacity:1;stroke-width:3.4}
   #wires path.temp{fill:none;stroke:var(--accent-2);stroke-width:2.6;stroke-dasharray:5 5;opacity:.95}
+  /* iOS Safari mis-hit-tests a filtered/overflowing SVG layer, so a wire's layer
+     captures taps over the connected blocks (controls/upload go dead). On touch,
+     make the wire layer purely visual; disconnect by tapping a glowing input dot. */
+  @media (pointer:coarse){
+    #wires,#wires path{filter:none;pointer-events:none}
+  }
 
   /* ---- node ---- */
   .node{
@@ -327,8 +337,9 @@
     <b>How it works.</b> Tap a block in the top bar to drop it on the canvas (or drag it).
     <b>To connect:</b> tap a block's <b>right</b> dot, then tap the target block —
     on a computer you can also just drag between the dots. <b>Tap a block</b> to see its result in the
-    right-side preview (download it there). Its controls stay visible on the box. Drag the empty canvas to
-    pan, pinch or scroll to zoom, tap a wire to remove it. Use <b>⧉</b> to duplicate a block, and
+    right-side preview (download it there). Its controls stay visible on the box. <b>To disconnect:</b>
+    tap a block's connected <b>left</b> dot (on a computer you can also tap the wire). Drag the empty canvas to
+    pan, pinch or scroll to zoom. Use <b>⧉</b> to duplicate a block, and
     <b>⬇ JSON / ⬇ ZIP</b> up top to export your project.
   </div>
   <div id="toast"></div>
