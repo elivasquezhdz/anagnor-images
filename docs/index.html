@@ -715,6 +715,43 @@ const WeaveFx=(function(){
 })();
 
 /* ================================================================== */
+/*  Photo grid collage (N images arranged in a grid)                   */
+/* ================================================================== */
+const GridFx=(function(){
+  // Draw img to fill the cell (cover-crop, centred). Caller clips to the cell.
+  function coverDraw(ctx,img,dx,dy,dw,dh){
+    const iw=img.width, ih=img.height, s=Math.max(dw/iw, dh/ih);
+    const w=iw*s, h=ih*s;
+    ctx.drawImage(img, dx+(dw-w)/2, dy+(dh-h)/2, w, h);
+  }
+  function render(images,p){
+    const count=Math.max(1, Math.min(9, +p.count||1));
+    let cols, rows;
+    if(p.square){ cols=rows=Math.ceil(Math.sqrt(count)); }           // square grid → square output
+    else { cols=Math.ceil(Math.sqrt(count)); rows=Math.ceil(count/cols); } // near-square rectangle
+    const cell=Math.max(160, Math.min(720, Math.floor(1800/Math.max(cols,rows))));
+    const gap=Math.round(cell*Math.max(0,Math.min(20,+p.gap||0))/100);
+    const W=cols*cell+gap*(cols+1), H=rows*cell+gap*(rows+1);
+    const c=newCanvas(W,H), ctx=c.getContext('2d');
+    ctx.fillStyle='#0b0f1a'; ctx.fillRect(0,0,W,H);                   // backdrop behind gaps / empty slots
+    // Which cell does image k land in, given the arrangement order?
+    function cellOf(k){
+      if(p.order==='col')    return {r:k%rows,             c:Math.floor(k/rows)};
+      if(p.order==='rowrev'){ const i=count-1-k; return {r:Math.floor(i/cols), c:i%cols}; }
+      return {r:Math.floor(k/cols), c:k%cols};                        // row by row (default)
+    }
+    for(let k=0;k<count;k++){
+      const {r,c:cc}=cellOf(k); if(r>=rows||cc>=cols) continue;
+      const dx=gap+cc*(cell+gap), dy=gap+r*(cell+gap), img=images[k];
+      if(img){ ctx.save(); ctx.beginPath(); ctx.rect(dx,dy,cell,cell); ctx.clip(); coverDraw(ctx,img,dx,dy,cell,cell); ctx.restore(); }
+      else { ctx.fillStyle='#11151f'; ctx.fillRect(dx,dy,cell,cell); } // empty slot placeholder
+    }
+    return c;
+  }
+  return {render};
+})();
+
+/* ================================================================== */
 /*  Vampire core (browser port of vampire_filter.py)                   */
 /* ================================================================== */
 const VampireFx=(function(){
@@ -1200,6 +1237,21 @@ const NODE_TYPES={
       return out;
     }
   },
+  grid:{
+    title:'Photo Grid', icon:'🪟',
+    inputs:['1','2','3','4','5','6','7','8','9'], dynamicInputs:'count', maxInputs:9,
+    params:[
+      {key:'count',label:'Images',type:'select',options:[2,3,4,5,6,7,8,9].map(n=>({value:String(n),label:String(n)})),default:'4'},
+      {key:'order',label:'Arrange',type:'select',options:[
+        {value:'row',label:'Row by row'},{value:'col',label:'Column by column'},{value:'rowrev',label:'Reversed'}],default:'row'},
+      {key:'square',label:'Perfect square',type:'toggle',default:true},
+      {key:'gap',label:'Gap',type:'range',min:0,max:12,step:1,default:0,suffix:' %'},
+    ],
+    process(inputs,p){
+      if(!inputs.some(Boolean)) return null;   // nothing connected yet
+      return GridFx.render(inputs, {count:+p.count, order:p.order, square:!!p.square, gap:+p.gap});
+    }
+  },
   vampire:{
     title:'Vampire', icon:'🧛', inputs:['Image'],
     params: vampireParams(),
@@ -1260,7 +1312,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','chroma','fill','weave','collage','vampire','fgbg','boxes','channel'];
+const PALETTE=['source','chroma','fill','weave','collage','grid','vampire','fgbg','boxes','channel'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -1278,11 +1330,23 @@ const world=document.getElementById('world');
 const wiresSvg=document.getElementById('wires');
 const gridCanvas=document.getElementById('grid');
 
+// Most blocks have a fixed input count; a block can instead declare
+// `dynamicInputs:'<paramKey>'` so its number of input ports follows that param.
+function inputCountOf(node){
+  const t=NODE_TYPES[node.type];
+  if(t.dynamicInputs){ const n=+node.params[t.dynamicInputs]; return Math.max(1, Math.min(t.maxInputs||9, n||2)); }
+  return t.inputs.length;
+}
+function inputLabelOf(node,i){
+  const t=NODE_TYPES[node.type];
+  return t.dynamicInputs ? String(i+1) : t.inputs[i];
+}
 function makeNode(type,x,y){
   const t=NODE_TYPES[type];
-  const node={ id:'n'+(++nodeSeq), type, x, y, params:{}, inputs:new Array(t.inputs.length).fill(null),
+  const node={ id:'n'+(++nodeSeq), type, x, y, params:{}, inputs:[],
     el:null, thumb:null, _out:null, error:null, image:null };
   t.params.forEach(pd=>{ if(pd.key!==undefined) node.params[pd.key]=pd.default; });
+  node.inputs=new Array(inputCountOf(node)).fill(null);
   return node;
 }
 function addNode(type,x,y){ const n=makeNode(type,x,y); NODES[n.id]=n; renderNode(n); return n; }
@@ -1292,6 +1356,7 @@ function duplicateNode(id){
   copy.params=JSON.parse(JSON.stringify(n.params));          // copy all settings
   if(n.type==='source' && n.image){ copy.image=cloneCanvas(n.image); copy.imageName=n.imageName; copy._imgId='dup'+(++nodeSeq); }
   const c=copy.el.querySelector('.params'); if(c) buildParams(copy,c);   // reflect copied values
+  if(NODE_TYPES[copy.type].dynamicInputs) rebuildInputs(copy);           // match copied input count
   if(copy.type==='source'){ const fn=copy.el.querySelector('.fname'); if(fn) fn.textContent=copy.image?(copy.imageName||'image'):'Using a sample image'; }
   selectNode(copy.id); scheduleEval();
 }
@@ -1375,12 +1440,13 @@ function renderNode(node){
 
   el.appendChild(body);
 
-  // ports
-  t.inputs.forEach((lbl,i)=>{
+  // ports (input count may be dynamic — see inputCountOf)
+  const nIn=inputCountOf(node);
+  for(let i=0;i<nIn;i++){
     const port=document.createElement('div'); port.className='port in'; port.dataset.id=node.id; port.dataset.idx=i; port.dataset.kind='in';
-    if(t.inputs.length>1){ const pl=document.createElement('span'); pl.className='plabel'; pl.textContent=lbl; port.appendChild(pl); }
+    if(nIn>1){ const pl=document.createElement('span'); pl.className='plabel'; pl.textContent=inputLabelOf(node,i); port.appendChild(pl); }
     el.appendChild(port);
-  });
+  }
   // Every node except the pure sink (Preview) has a single output port.
   if(!t.preview){
     const outp=document.createElement('div'); outp.className='port out'; outp.dataset.id=node.id; outp.dataset.kind='out';
@@ -1477,7 +1543,7 @@ function buildParams(node,container){
       const lab=document.createElement('label'); lab.textContent=pd.label;
       let input;
       if(pd.type==='select'){
-        input=buildSelect(pd,node,()=>{ refreshParamVisibility(node); scheduleEval(); });
+        input=buildSelect(pd,node,()=>{ if(t.dynamicInputs===pd.key) rebuildInputs(node); refreshParamVisibility(node); scheduleEval(); });
         lab.textContent=pd.label; row.appendChild(lab); row.appendChild(input);
       }else if(pd.type==='number'){
         input=document.createElement('input'); input.type='number'; if(pd.min!=null)input.min=pd.min; input.value=node.params[pd.key];
@@ -1561,18 +1627,37 @@ function wireNodeInteractions(node){
   node.el.querySelector('.body').addEventListener('pointerdown',e=>{ startDrag(e); });
 
   // Ports.
-  node.el.querySelectorAll('.port').forEach(port=>{
-    port.addEventListener('pointerdown',e=>{
-      e.stopPropagation(); e.preventDefault();
-      if(port.dataset.kind==='out'){
-        startWireDrag(node.id, e);          // drag OR tap-to-arm (see startWireDrag)
-      }else{
-        const idx=+port.dataset.idx;
-        if(armed){ connect(armed, node.id, idx); clearArmed(); }   // tap-to-connect target
-        else if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); } // tap connected input to detach
-      }
-    });
+  node.el.querySelectorAll('.port').forEach(port=>wirePort(node,port));
+}
+// Attach connect/detach behaviour to a single port (reused for dynamic inputs).
+function wirePort(node,port){
+  port.addEventListener('pointerdown',e=>{
+    e.stopPropagation(); e.preventDefault();
+    if(port.dataset.kind==='out'){
+      startWireDrag(node.id, e);            // drag OR tap-to-arm (see startWireDrag)
+    }else{
+      const idx=+port.dataset.idx;
+      if(armed){ connect(armed, node.id, idx); clearArmed(); }     // tap-to-connect target
+      else if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); } // tap connected input to detach
+    }
   });
+}
+// Rebuild a dynamic block's input ports to match its count param, keeping the
+// connections that still fit and dropping the rest.
+function rebuildInputs(node){
+  if(!node.el) return;
+  const n=inputCountOf(node);
+  if(node.inputs.length>n) node.inputs.length=n;
+  while(node.inputs.length<n) node.inputs.push(null);
+  node.el.querySelectorAll('.port.in').forEach(p=>p.remove());
+  const out=node.el.querySelector('.port.out');
+  for(let i=0;i<n;i++){
+    const port=document.createElement('div'); port.className='port in'; port.dataset.id=node.id; port.dataset.idx=i; port.dataset.kind='in';
+    if(n>1){ const pl=document.createElement('span'); pl.className='plabel'; pl.textContent=inputLabelOf(node,i); port.appendChild(pl); }
+    node.el.insertBefore(port, out||null);
+    wirePort(node,port);
+  }
+  positionInPorts(node); drawWires();
 }
 
 // Connecting works two ways, so it's easy on both mouse and touch:
@@ -2037,6 +2122,7 @@ async function loadProject(data, sources){
     const n=addNode(nd.type, +nd.x||0, +nd.y||0); idMap[nd.id]=n.id;
     if(nd.params) n.params=Object.assign({}, n.params, nd.params);
     const c=n.el.querySelector('.params'); if(c) buildParams(n,c);
+    if(NODE_TYPES[nd.type].dynamicInputs) rebuildInputs(n);   // resize ports to the saved count before wiring inputs
     if(nd.type==='source'){
       const fn=n.el.querySelector('.fname');
       if(sources && nd.source && nd.source.file && sources.get(nd.source.file)){
