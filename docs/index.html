@@ -596,6 +596,74 @@ const FillFx=(function(){
 })();
 
 /* ================================================================== */
+/*  Woven grid (basket weave)                                          */
+/*  Horizontal (weft) + vertical (warp) strands of "fabric size",      */
+/*  interleaved over-under so one bar sits in front of the other.      */
+/* ================================================================== */
+const WeaveFx=(function(){
+  // Mean colour of each strand band (axis 'h' -> rows by cy, 'v' -> cols by cx).
+  function meanBands(d,w,h,t,axis){
+    const n = axis==='h' ? Math.ceil(h/t) : Math.ceil(w/t);
+    const sum=new Float64Array(n*3), cnt=new Float64Array(n);
+    for(let y=0;y<h;y++){ const by=(y/t)|0; for(let x=0;x<w;x++){
+      const i=(y*w+x)*4; const b = axis==='h' ? by : ((x/t)|0);
+      sum[b*3]+=d[i]; sum[b*3+1]+=d[i+1]; sum[b*3+2]+=d[i+2]; cnt[b]++; } }
+    const out=new Array(n);
+    for(let b=0;b<n;b++){ const c=cnt[b]||1; out[b]=[sum[b*3]/c,sum[b*3+1]/c,sum[b*3+2]/c]; }
+    return out;
+  }
+  // True when the HORIZONTAL strand is on top at cell (cx,cy).
+  function horizTop(cx,cy,pattern,phaseHoriz){
+    let hv;
+    if(pattern==='basket')     hv = ((((cx>>1)+(cy>>1))&1)===0);      // over-2 / under-2
+    else if(pattern==='twill') hv = ((((cx-cy)%4)+4)%4) < 2;          // diagonal rib
+    else                       hv = (((cx+cy)&1)===0);                // plain over-1 / under-1
+    return phaseHoriz ? hv : !hv;
+  }
+  function apply(srcData,w,h,p){
+    const s=srcData.data;
+    const out=new ImageData(new Uint8ClampedArray(s),w,h), d=out.data;
+    const minDim=Math.min(w,h);
+    let t=Math.round(minDim*(p.size/100));
+    t=Math.max(3,Math.min(t,Math.floor(minDim/2)||3));                // >=3px, >=2 strands
+    const pattern=p.pattern||'plain', phaseHoriz=p.phase!=='vertical';
+    const depth=Math.max(0,Math.min(1,(p.depth||0)/100));
+    const gpx=Math.max(0,Math.min(0.45,(p.gap||0)/100))*t;            // seam half-thickness in px
+    const solid = p.style==='solid';
+    const clampX=x=>x<0?0:(x>w-1?w-1:x), clampY=y=>y<0?0:(y>h-1?h-1:y);
+    let hMean=null,vMean=null;
+    if(solid){ hMean=meanBands(s,w,h,t,'h'); vMean=meanBands(s,w,h,t,'v'); }
+    for(let y=0;y<h;y++){
+      const cy=(y/t)|0, vy=y-cy*t;
+      for(let x=0;x<w;x++){
+        const cx=(x/t)|0, vx=x-cx*t;
+        const hTop=horizTop(cx,cy,pattern,phaseHoriz);
+        let r,g,b;
+        if(hTop){                                                     // horizontal strand shows its row band
+          if(solid){ const c=hMean[cy]; r=c[0];g=c[1];b=c[2]; }
+          else { const si=(clampY(cy*t+(t>>1))*w+clampX(x))*4; r=s[si];g=s[si+1];b=s[si+2]; }
+        }else{                                                        // vertical strand shows its column band
+          if(solid){ const c=vMean[cx]; r=c[0];g=c[1];b=c[2]; }
+          else { const si=(clampY(y)*w+clampX(cx*t+(t>>1)))*4; r=s[si];g=s[si+1];b=s[si+2]; }
+        }
+        if(depth>0){                                                  // tubular thread shading across the strand
+          const across = hTop ? (vy/t) : (vx/t);
+          const f = 1 + depth*(Math.sin(Math.PI*across)-0.5)*0.9;     // bright middle, dark edges
+          r*=f; g*=f; b*=f;
+        }
+        if(gpx>0){                                                    // dark seams between threads
+          if(Math.min(vx,t-vx,vy,t-vy) < gpx){ r*=0.32; g*=0.32; b*=0.32; }
+        }
+        const ti=(y*w+x)*4;
+        d[ti]=r; d[ti+1]=g; d[ti+2]=b; d[ti+3]=255;
+      }
+    }
+    return out;
+  }
+  return {apply};
+})();
+
+/* ================================================================== */
 /*  Vampire core (browser port of vampire_filter.py)                   */
 /* ================================================================== */
 const VampireFx=(function(){
@@ -1053,6 +1121,23 @@ const NODE_TYPES={
       return dataToCanvas(FillFx.apply(data,w,h,pp));
     }
   },
+  weave:{
+    title:'Weave', icon:'🧶', inputs:['Image'],
+    params:[
+      {key:'size',label:'Fabric size',type:'range',min:2,max:50,step:1,default:8,suffix:' %'},
+      {key:'style',label:'Strands',type:'select',options:[{value:'photo',label:'Photo strips'},{value:'solid',label:'Solid colours'}],default:'photo'},
+      {key:'pattern',label:'Weave',type:'select',options:[{value:'plain',label:'Plain (over–under)'},{value:'basket',label:'Basket (2×2)'},{value:'twill',label:'Twill (diagonal)'}],default:'plain'},
+      {key:'phase',label:'Top strand',type:'select',options:[{value:'horizontal',label:'Horizontal'},{value:'vertical',label:'Vertical'}],default:'horizontal'},
+      {key:'depth',label:'Thread depth',type:'range',min:0,max:100,step:1,default:35,suffix:' %'},
+      {key:'gap',label:'Thread gap',type:'range',min:0,max:40,step:1,default:0,suffix:' %'},
+    ],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const w=src.width,h=src.height, data=canvasData(src);
+      const pp={ size:+p.size, style:p.style, pattern:p.pattern, phase:p.phase, depth:+p.depth, gap:+p.gap };
+      return dataToCanvas(WeaveFx.apply(data,w,h,pp));
+    }
+  },
   collage:{
     title:'4-Way Collage', icon:'🪞', inputs:['Image'],
     params:[{key:'sections',label:'Sections',type:'range',min:2,max:60,step:1,default:20}],
@@ -1124,7 +1209,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','chroma','fill','collage','vampire','fgbg','boxes','channel'];
+const PALETTE=['source','chroma','fill','weave','collage','vampire','fgbg','boxes','channel'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
