@@ -158,6 +158,29 @@
     background:var(--panel-2);color:var(--text);border:1px solid var(--border);
     border-radius:7px;padding:6px 8px;font-size:.82rem;width:100%;
   }
+  /* Custom dropdown — native <select> popups misbehave inside the transformed
+     #world on iOS Safari, so we render the option list in <body> instead. */
+  .dd{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    border-radius:7px;padding:7px 9px;font-size:.82rem;font-weight:500;cursor:pointer;
+    text-align:left;font-family:inherit;line-height:1.2;
+  }
+  .dd:hover,.dd:focus,.dd.open{border-color:var(--accent);outline:none}
+  .dd .dd-val{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dd .dd-caret{color:var(--muted);font-size:.66rem;flex:0 0 auto}
+  .dd-pop{
+    position:fixed;z-index:130;min-width:150px;max-height:52vh;overflow:auto;
+    background:var(--panel-2);border:1px solid var(--accent);border-radius:10px;
+    box-shadow:0 14px 36px rgba(0,0,0,.62);padding:5px;-webkit-overflow-scrolling:touch;
+  }
+  .dd-opt{
+    display:block;width:100%;text-align:left;background:transparent;color:var(--text);
+    border:none;border-radius:7px;padding:10px 11px;font-size:.9rem;cursor:pointer;
+    font-family:inherit;white-space:nowrap;
+  }
+  .dd-opt:hover{background:var(--panel-3)}
+  .dd-opt.sel{background:var(--accent);color:#0b1220;font-weight:600}
   .p-sub{font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;
     font-weight:700;margin:4px 0 7px}
   .p-toggle{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:.8rem;color:var(--text);text-transform:none}
@@ -1378,6 +1401,53 @@ function fmtVal(pd,v){
   if(pd.dp!=null) return (+v).toFixed(pd.dp)+(pd.suffix||'');
   return Math.round(+v)+(pd.suffix||'');
 }
+/* Custom dropdown (replaces native <select> for node params — see CSS note). */
+let openDropdown=null;
+function closeDropdown(){
+  if(!openDropdown) return;
+  const d=openDropdown; openDropdown=null;
+  d.trig.classList.remove('open');
+  d.pop.remove();
+  document.removeEventListener('pointerdown',d.outside,true);
+  window.removeEventListener('scroll',d.close,true);
+  window.removeEventListener('resize',d.close);
+}
+function buildSelect(pd,node,onChange){
+  const trig=document.createElement('button'); trig.type='button'; trig.className='dd';
+  const val=document.createElement('span'); val.className='dd-val';
+  const car=document.createElement('span'); car.className='dd-caret'; car.textContent='▾';
+  trig.appendChild(val); trig.appendChild(car);
+  const labelFor=v=>{ const o=pd.options.find(o=>String(o.value)===String(v)); return o?o.label:String(v); };
+  function sync(){ val.textContent=labelFor(node.params[pd.key]); }
+  sync(); trig._sync=sync;
+  function open(){
+    closeDropdown();
+    const pop=document.createElement('div'); pop.className='dd-pop';
+    pd.options.forEach(o=>{
+      const b=document.createElement('button'); b.type='button';
+      b.className='dd-opt'+(String(o.value)===String(node.params[pd.key])?' sel':''); b.textContent=o.label;
+      b.addEventListener('click',ev=>{ ev.stopPropagation(); node.params[pd.key]=o.value; sync(); closeDropdown(); onChange&&onChange(); });
+      pop.appendChild(b);
+    });
+    document.body.appendChild(pop);
+    const r=trig.getBoundingClientRect(); const pw=Math.max(r.width,150);
+    pop.style.width=pw+'px';
+    pop.style.left=Math.max(8,Math.min(r.left, window.innerWidth-pw-8))+'px';
+    const ph=pop.offsetHeight;
+    if(r.bottom+ph+6<=window.innerHeight) pop.style.top=(r.bottom+4)+'px';
+    else if(r.top-ph-6>=0)                pop.style.top=(r.top-ph-4)+'px';
+    else                                  pop.style.top=Math.max(8,window.innerHeight-ph-8)+'px';
+    trig.classList.add('open');
+    const outside=e=>{ if(pop.contains(e.target)||trig.contains(e.target)) return; closeDropdown(); };
+    const close=()=>closeDropdown();
+    document.addEventListener('pointerdown',outside,true);
+    window.addEventListener('scroll',close,true); window.addEventListener('resize',close);
+    openDropdown={trig,pop,outside,close};
+  }
+  trig.addEventListener('pointerdown',e=>e.stopPropagation());   // don't start a node drag
+  trig.addEventListener('click',e=>{ e.stopPropagation(); (openDropdown&&openDropdown.trig===trig)?closeDropdown():open(); });
+  return trig;
+}
 function buildParams(node,container){
   const t=NODE_TYPES[node.type];
   container.innerHTML='';
@@ -1396,10 +1466,7 @@ function buildParams(node,container){
       const lab=document.createElement('label'); lab.textContent=pd.label;
       let input;
       if(pd.type==='select'){
-        input=document.createElement('select');
-        pd.options.forEach(o=>{ const op=document.createElement('option'); op.value=o.value; op.textContent=o.label; input.appendChild(op); });
-        input.value=node.params[pd.key];
-        input.addEventListener('change',()=>{ node.params[pd.key]=input.value; refreshParamVisibility(node); scheduleEval(); });
+        input=buildSelect(pd,node,()=>{ refreshParamVisibility(node); scheduleEval(); });
         lab.textContent=pd.label; row.appendChild(lab); row.appendChild(input);
       }else if(pd.type==='number'){
         input=document.createElement('input'); input.type='number'; if(pd.min!=null)input.min=pd.min; input.value=node.params[pd.key];
@@ -1840,7 +1907,7 @@ document.getElementById('helpClose').addEventListener('click',()=>{ document.get
 /* ------------------------------------------------------------------ */
 /*  Reset / init                                                       */
 /* ------------------------------------------------------------------ */
-function clearGraph(){ if(armed) clearArmed(); Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); }); NODES={}; selectedId=null; drawWires(); }
+function clearGraph(){ if(armed) clearArmed(); closeDropdown(); Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); }); NODES={}; selectedId=null; drawWires(); }
 function defaultGraph(){
   clearGraph();
   const src=addNode('source',40,150);
