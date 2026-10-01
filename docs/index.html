@@ -287,8 +287,12 @@
     /* Palette becomes a single horizontally-scrollable row on its own line,
        so 9 blocks no longer wrap the top bar into a wall that eats the canvas. */
     .palette{order:9;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
-      -webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}
-    .palette::-webkit-scrollbar{display:none}
+      -webkit-overflow-scrolling:touch;scrollbar-width:thin;padding-bottom:3px}
+    /* chips default to touch-action:none (for desktop drag-to-canvas); on touch
+       we add by tap, so let a horizontal swipe scroll the palette to all blocks. */
+    .palette .chip{touch-action:pan-x}
+    .palette::-webkit-scrollbar{height:4px}
+    .palette::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:4px}
     #help{max-width:calc(100% - 32px)}
     #animPanel{right:8px;left:8px;width:auto;top:56px}
     #main{flex-direction:column}
@@ -1465,8 +1469,12 @@ function renderNode(node){
 function positionInPorts(node){
   if(!node.el) return;
   const ports=node.el.querySelectorAll('.port.in');
-  const h=node.el.offsetHeight||120;
   const n=ports.length;
+  // Give multi-input blocks enough height that the input dots sit a comfortable,
+  // equal distance apart (and from the top/bottom edge) so they're easy to hit
+  // and tap-connect on touch — otherwise many dots cram together on a short block.
+  node.el.style.minHeight = n>1 ? ((n+1)*44)+'px' : '';
+  const h=node.el.offsetHeight||120;
   ports.forEach((p,i)=>{ const frac=(i+1)/(n+1); p.style.top=(frac*h-7)+'px'; });
   const out=node.el.querySelector('.port.out');
   if(out) out.style.top=(h/2-7)+'px';
