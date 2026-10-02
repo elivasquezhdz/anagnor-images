@@ -656,18 +656,13 @@ const FillFx=(function(){
 /*  interleaved over-under so one bar sits in front of the other.      */
 /* ================================================================== */
 const WeaveFx=(function(){
-  // Mean colour of each strand band (axis 'h' -> rows by cy, 'v' -> cols by cx).
-  function meanBands(d,w,h,t,axis){
-    const n = axis==='h' ? Math.ceil(h/t) : Math.ceil(w/t);
-    const sum=new Float64Array(n*3), cnt=new Float64Array(n);
-    for(let y=0;y<h;y++){ const by=(y/t)|0; for(let x=0;x<w;x++){
-      const i=(y*w+x)*4; const b = axis==='h' ? by : ((x/t)|0);
-      sum[b*3]+=d[i]; sum[b*3+1]+=d[i+1]; sum[b*3+2]+=d[i+2]; cnt[b]++; } }
-    const out=new Array(n);
-    for(let b=0;b<n;b++){ const c=cnt[b]||1; out[b]=[sum[b*3]/c,sum[b*3+1]/c,sum[b*3+2]/c]; }
-    return out;
+  // Mean colour over a pixel rectangle [x0,x1) x [y0,y1).
+  function meanRect(d,w,x0,y0,x1,y1){
+    let r=0,g=0,b=0,n=0;
+    for(let y=y0;y<y1;y++){ let i=(y*w+x0)*4; for(let x=x0;x<x1;x++){ r+=d[i];g+=d[i+1];b+=d[i+2];i+=4;n++; } }
+    if(!n) return [0,0,0]; return [r/n,g/n,b/n];
   }
-  // True when the HORIZONTAL strand is on top at cell (cx,cy).
+  // True when the HORIZONTAL strand is on top at cell (cx,cy) in a woven pattern.
   function horizTop(cx,cy,pattern,phaseHoriz){
     let hv;
     if(pattern==='basket')     hv = ((((cx>>1)+(cy>>1))&1)===0);      // over-2 / under-2
@@ -681,29 +676,44 @@ const WeaveFx=(function(){
     const minDim=Math.min(w,h);
     let t=Math.round(minDim*(p.size/100));
     t=Math.max(3,Math.min(t,Math.floor(minDim/2)||3));                // >=3px, >=2 strands
-    const pattern=p.pattern||'plain', phaseHoriz=p.phase!=='vertical';
-    const depth=Math.max(0,Math.min(1,(p.depth||0)/100));
+    const cols=Math.ceil(w/t), rows=Math.ceil(h/t);
+    const pattern=p.pattern||'plain', stripes=pattern==='stripes';
+    const phaseHoriz=p.phase!=='vertical';
+    const depth=stripes?0:Math.max(0,Math.min(1,(p.depth||0)/100));   // flat stripes carry no 3D shading
     const gpx=Math.max(0,Math.min(0.45,(p.gap||0)/100))*t;            // seam half-thickness in px
-    const solid = p.style==='solid';
+    const style=p.style||'photo', edge=style==='edge', solid=style==='solid';
     const clampX=x=>x<0?0:(x>w-1?w-1:x), clampY=y=>y<0?0:(y>h-1?h-1:y);
-    let hMean=null,vMean=null;
-    if(solid){ hMean=meanBands(s,w,h,t,'h'); vMean=meanBands(s,w,h,t,'v'); }
+    // Thread colours per band for the flat 'solid' / 'edge' sources.
+    //  horizontal thread i -> hColor[i], vertical thread j -> vColor[j].
+    let hColor=null, vColor=null;
+    if(solid||edge){
+      hColor=new Array(rows); vColor=new Array(cols);
+      const ex = p.hEdge==='right' ? w-1 : 0;                         // vertical edge feeds horizontal threads
+      const ey = p.vEdge==='bottom' ? h-1 : 0;                        // horizontal edge feeds vertical threads
+      for(let by=0;by<rows;by++){ const y0=by*t, y1=Math.min(h,y0+t);
+        hColor[by] = edge ? meanRect(s,w,ex,y0,ex+1,y1) : meanRect(s,w,0,y0,w,y1); }
+      for(let bx=0;bx<cols;bx++){ const x0=bx*t, x1=Math.min(w,x0+t);
+        vColor[bx] = edge ? meanRect(s,w,x0,ey,x1,ey+1) : meanRect(s,w,x0,0,x1,h); }
+    }
     for(let y=0;y<h;y++){
       const cy=(y/t)|0, vy=y-cy*t;
       for(let x=0;x<w;x++){
         const cx=(x/t)|0, vx=x-cx*t;
-        const hTop=horizTop(cx,cy,pattern,phaseHoriz);
+        // Which thread is visible here? Woven = over/under checkerboard; Stripes =
+        // flat alternation: Top strand Vertical -> stripes by column, Horizontal -> by row.
+        const hVis = stripes ? (phaseHoriz ? (cy&1)===1 : (cx&1)===0)
+                             : horizTop(cx,cy,pattern,phaseHoriz);
         let r,g,b;
-        if(hTop){                                                     // horizontal strand shows its row band
-          if(solid){ const c=hMean[cy]; r=c[0];g=c[1];b=c[2]; }
+        if(hVis){                                                     // horizontal thread
+          if(solid||edge){ const c=hColor[cy]; r=c[0];g=c[1];b=c[2]; }
           else { const si=(clampY(cy*t+(t>>1))*w+clampX(x))*4; r=s[si];g=s[si+1];b=s[si+2]; }
-        }else{                                                        // vertical strand shows its column band
-          if(solid){ const c=vMean[cx]; r=c[0];g=c[1];b=c[2]; }
+        }else{                                                        // vertical thread
+          if(solid||edge){ const c=vColor[cx]; r=c[0];g=c[1];b=c[2]; }
           else { const si=(clampY(y)*w+clampX(cx*t+(t>>1)))*4; r=s[si];g=s[si+1];b=s[si+2]; }
         }
         if(depth>0){                                                  // tubular thread shading across the strand
-          const across = hTop ? (vy/t) : (vx/t);
-          const f = 1 + depth*(Math.sin(Math.PI*across)-0.5)*0.9;     // bright middle, dark edges
+          const across = hVis ? (vy/t) : (vx/t);
+          const f = 1 + depth*(Math.sin(Math.PI*across)-0.5)*0.9;
           r*=f; g*=f; b*=f;
         }
         if(gpx>0){                                                    // dark seams between threads
@@ -1217,16 +1227,20 @@ const NODE_TYPES={
     title:'Weave', icon:'🧶', inputs:['Image'],
     params:[
       {key:'size',label:'Fabric size',type:'range',min:2,max:50,step:1,default:8,suffix:' %'},
-      {key:'style',label:'Strands',type:'select',options:[{value:'photo',label:'Photo strips'},{value:'solid',label:'Solid colours'}],default:'photo'},
-      {key:'pattern',label:'Weave',type:'select',options:[{value:'plain',label:'Plain (over–under)'},{value:'basket',label:'Basket (2×2)'},{value:'twill',label:'Twill (diagonal)'}],default:'plain'},
+      {key:'style',label:'Strands',type:'select',options:[
+        {value:'photo',label:'Photo strips'},{value:'solid',label:'Solid colours'},{value:'edge',label:'Edge ribbons'}],default:'photo'},
+      {key:'hEdge',label:'Horizontal threads from',type:'select',options:[{value:'left',label:'Left edge'},{value:'right',label:'Right edge'}],default:'left',showIf:p=>p.style==='edge'},
+      {key:'vEdge',label:'Vertical threads from',type:'select',options:[{value:'top',label:'Top edge'},{value:'bottom',label:'Bottom edge'}],default:'top',showIf:p=>p.style==='edge'},
+      {key:'pattern',label:'Weave',type:'select',options:[
+        {value:'stripes',label:'Stripes (flat)'},{value:'plain',label:'Plain (over–under)'},{value:'basket',label:'Basket (2×2)'},{value:'twill',label:'Twill (diagonal)'}],default:'plain'},
       {key:'phase',label:'Top strand',type:'select',options:[{value:'horizontal',label:'Horizontal'},{value:'vertical',label:'Vertical'}],default:'horizontal'},
-      {key:'depth',label:'Thread depth',type:'range',min:0,max:100,step:1,default:35,suffix:' %'},
+      {key:'depth',label:'Thread depth',type:'range',min:0,max:100,step:1,default:35,suffix:' %',showIf:p=>p.pattern!=='stripes'},
       {key:'gap',label:'Thread gap',type:'range',min:0,max:40,step:1,default:0,suffix:' %'},
     ],
     process(inputs,p){
       const src=inputs[0]; if(!src) return null;
       const w=src.width,h=src.height, data=canvasData(src);
-      const pp={ size:+p.size, style:p.style, pattern:p.pattern, phase:p.phase, depth:+p.depth, gap:+p.gap };
+      const pp={ size:+p.size, style:p.style, pattern:p.pattern, phase:p.phase, depth:+p.depth, gap:+p.gap, hEdge:p.hEdge, vEdge:p.vEdge };
       return dataToCanvas(WeaveFx.apply(data,w,h,pp));
     }
   },
