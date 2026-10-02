@@ -1228,11 +1228,11 @@ const NODE_TYPES={
     params:[
       {key:'size',label:'Fabric size',type:'range',min:2,max:50,step:1,default:8,suffix:' %'},
       {key:'style',label:'Strands',type:'select',options:[
-        {value:'photo',label:'Photo strips'},{value:'solid',label:'Solid colours'},{value:'edge',label:'Edge ribbons'}],default:'photo'},
+        {value:'edge',label:'Edge ribbons'},{value:'photo',label:'Photo strips'},{value:'solid',label:'Solid colours'}],default:'edge'},
       {key:'hEdge',label:'Horizontal threads from',type:'select',options:[{value:'left',label:'Left edge'},{value:'right',label:'Right edge'}],default:'left',showIf:p=>p.style==='edge'},
       {key:'vEdge',label:'Vertical threads from',type:'select',options:[{value:'top',label:'Top edge'},{value:'bottom',label:'Bottom edge'}],default:'top',showIf:p=>p.style==='edge'},
       {key:'pattern',label:'Weave',type:'select',options:[
-        {value:'stripes',label:'Stripes (flat)'},{value:'plain',label:'Plain (over–under)'},{value:'basket',label:'Basket (2×2)'},{value:'twill',label:'Twill (diagonal)'}],default:'plain'},
+        {value:'stripes',label:'Stripes (flat)'},{value:'plain',label:'Plain (over–under)'},{value:'basket',label:'Basket (2×2)'},{value:'twill',label:'Twill (diagonal)'}],default:'stripes'},
       {key:'phase',label:'Top strand',type:'select',options:[{value:'horizontal',label:'Horizontal'},{value:'vertical',label:'Vertical'}],default:'horizontal'},
       {key:'depth',label:'Thread depth',type:'range',min:0,max:100,step:1,default:35,suffix:' %',showIf:p=>p.pattern!=='stripes'},
       {key:'gap',label:'Thread gap',type:'range',min:0,max:40,step:1,default:0,suffix:' %'},
