@@ -1376,7 +1376,19 @@ function duplicateNode(id){
   const c=copy.el.querySelector('.params'); if(c) buildParams(copy,c);   // reflect copied values
   if(NODE_TYPES[copy.type].dynamicInputs) rebuildInputs(copy);           // match copied input count
   if(copy.type==='source'){ const fn=copy.el.querySelector('.fname'); if(fn) fn.textContent=copy.image?(copy.imageName||'image'):'Using a sample image'; }
-  selectNode(copy.id); scheduleEval();
+  // Duplicate the wiring too (source + destination connectors):
+  //  • incoming — the copy feeds from the same source blocks as the original.
+  for(let i=0;i<copy.inputs.length && i<n.inputs.length;i++) copy.inputs[i]=n.inputs[i];
+  //  • outgoing — wire the copy into a free input of every block the original fed
+  //    (a block with no spare input keeps just the original).
+  Object.values(NODES).forEach(dst=>{
+    if(dst===copy || dst===n) return;
+    if(dst.inputs.indexOf(n.id)>=0 && dst.inputs.indexOf(copy.id)<0){
+      const free=dst.inputs.indexOf(null);
+      if(free>=0 && !createsCycle(copy.id,dst.id)) dst.inputs[free]=copy.id;
+    }
+  });
+  selectNode(copy.id); drawWires(); scheduleEval();
 }
 function removeNode(id){
   const n=NODES[id]; if(!n) return;
