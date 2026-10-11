@@ -443,6 +443,28 @@ function scaleToMax(canvas,maxSide){
   c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);
   return c;
 }
+/* Image-block transforms: crop (percent insets) → rotate 90° steps → flip.
+   Returns the source untouched when every option is at its default. */
+function transformSource(src,p){
+  if(!src) return src; let c=src;
+  if(p.crop){
+    const w=c.width,h=c.height;
+    let l=Math.round(w*(+p.cropL||0)/100), r=Math.round(w*(+p.cropR||0)/100);
+    let t=Math.round(h*(+p.cropT||0)/100), b=Math.round(h*(+p.cropB||0)/100);
+    const cw=w-l-r, ch=h-t-b;
+    if((l||r||t||b) && cw>=1 && ch>=1){ const cc=newCanvas(cw,ch); cc.getContext('2d').drawImage(c,l,t,cw,ch,0,0,cw,ch); c=cc; }
+  }
+  const rot=((Math.round(+p.rotate||0)%360)+360)%360;
+  if(rot===90||rot===180||rot===270){
+    const swap=(rot===90||rot===270), rc=newCanvas(swap?c.height:c.width, swap?c.width:c.height), rx=rc.getContext('2d');
+    rx.translate(rc.width/2,rc.height/2); rx.rotate(rot*Math.PI/180); rx.drawImage(c,-c.width/2,-c.height/2); c=rc;
+  }
+  if(p.flipH||p.flipV){
+    const fc=newCanvas(c.width,c.height), fx=fc.getContext('2d');
+    fx.translate(p.flipH?c.width:0, p.flipV?c.height:0); fx.scale(p.flipH?-1:1, p.flipV?-1:1); fx.drawImage(c,0,0); c=fc;
+  }
+  return c;
+}
 function isIOS(){
   const ua=navigator.userAgent||'';
   return /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
@@ -1357,8 +1379,19 @@ function vampPreset(p){
 
 const NODE_TYPES={
   source:{
-    title:'Image', icon:'🖼️', inputs:[], source:true, params:[],
-    process(_,p,node){ return node.image||null; }
+    title:'Image', icon:'🖼️', inputs:[], source:true,
+    params:[
+      {key:'rotate',label:'Rotate',type:'select',options:[
+        {value:'0',label:'0°'},{value:'90',label:'90° ↻'},{value:'180',label:'180°'},{value:'270',label:'270° ↺'}],default:'0'},
+      {key:'flipH',label:'Flip horizontal',type:'toggle',default:false},
+      {key:'flipV',label:'Flip vertical',type:'toggle',default:false},
+      {key:'crop',label:'Crop',type:'toggle',default:false},
+      {key:'cropT',label:'Crop top',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
+      {key:'cropR',label:'Crop right',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
+      {key:'cropB',label:'Crop bottom',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
+      {key:'cropL',label:'Crop left',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
+    ],
+    process(_,p,node){ return node.image?transformSource(node.image,p):null; }
   },
   chroma:{
     title:'Chroma Shift', icon:'🌈', inputs:['Image'],
