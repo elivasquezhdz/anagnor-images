@@ -193,6 +193,9 @@
   .dd-opt.sel{background:var(--accent);color:#0b1220;font-weight:600}
   .p-sub{font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;
     font-weight:700;margin:4px 0 7px}
+  .p-note{font-size:.69rem;color:var(--muted);line-height:1.35;margin:2px 0 9px}
+  .p-note a{color:var(--accent-2);text-decoration:none}
+  .p-note a:hover{text-decoration:underline}
   .p-toggle{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:.8rem;color:var(--text);text-transform:none}
   .p-toggle input{width:16px;height:16px;accent-color:var(--accent)}
   .filebtn{
@@ -345,6 +348,9 @@
     tap a block's connected <b>left</b> dot (on a computer you can also tap the wire). Drag the empty canvas to
     pan, pinch or scroll to zoom. Use <b>⧉</b> to duplicate a block, and
     <b>⬇ JSON / ⬇ ZIP</b> up top to export your project.
+    <br><span style="color:var(--muted)">The <b>🔺 Primitive</b> block is a JavaScript port of
+    <a href="https://github.com/fogleman/primitive" target="_blank" rel="noopener" style="color:var(--accent-2)">fogleman/primitive</a>
+    by Michael Fogleman (MIT).</span>
   </div>
   <div id="toast"></div>
 </div>
@@ -763,6 +769,167 @@ const GridFx=(function(){
     return c;
   }
   return {render};
+})();
+
+/* ================================================================== */
+/*  Primitive — reproduce an image with geometric shapes               */
+/*  JavaScript port of github.com/fogleman/primitive (MIT, © 2016      */
+/*  Michael Fogleman). A hill-climbing optimiser: each step searches   */
+/*  for the single shape + colour that most reduces the difference     */
+/*  from the target, then commits it. Faithful to the Go core, scaled  */
+/*  down for the browser (deterministic seed, async + cancellable).    */
+/* ================================================================== */
+const PrimitiveFx=(function(){
+  const clampI=(x,lo,hi)=>x<lo?lo:(x>hi?hi:x);
+  const clampF=(x,lo,hi)=>x<lo?lo:(x>hi?hi:x);
+  const rad=d=>d*Math.PI/180;
+  function makeRng(seed){
+    let a=(seed>>>0)||1, spare=0, has=false;
+    const u=()=>{ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; };
+    return { f:u, intn:n=>Math.floor(u()*n),
+      norm(){ if(has){has=false;return spare;} let x,y,s; do{x=u()*2-1;y=u()*2-1;s=x*x+y*y;}while(s>=1||s===0); const m=Math.sqrt(-2*Math.log(s)/s); spare=y*m; has=true; return x*m; } };
+  }
+  // worker: target/current/buffer RGBA bytes + reusable scanline scratch
+  function makeWorker(W,H,target){ const cap=H*2+8;
+    return { W,H,target, current:null, buffer:new Uint8ClampedArray(W*H*4), score:0, rnd:null,
+      ly:new Int32Array(cap), lx1:new Int32Array(cap), lx2:new Int32Array(cap), n:0, xint:new Float64Array(64) }; }
+
+  /* ---- core pixel ops over the current scanlines (wk.ly/lx1/lx2, wk.n) ---- */
+  function computeColor(wk, alpha){
+    const t=wk.target, c=wk.current, W=wk.W, a=Math.floor(0x101*255/alpha);
+    let rs=0,gs=0,bs=0,count=0;
+    for(let k=0;k<wk.n;k++){ const y=wk.ly[k],x1=wk.lx1[k],x2=wk.lx2[k]; let i=(y*W+x1)*4;
+      for(let x=x1;x<=x2;x++){ const tr=t[i],tg=t[i+1],tb=t[i+2],cr=c[i],cg=c[i+1],cb=c[i+2];
+        rs+=(tr-cr)*a+cr*0x101; gs+=(tg-cg)*a+cg*0x101; bs+=(tb-cb)*a+cb*0x101; count++; i+=4; } }
+    if(!count) return {r:0,g:0,b:0,a:alpha};
+    return { r:clampI((Math.floor(rs/count))>>8,0,255), g:clampI((Math.floor(gs/count))>>8,0,255), b:clampI((Math.floor(bs/count))>>8,0,255), a:alpha };
+  }
+  function copyLines(dst, src, wk){ const W=wk.W; for(let k=0;k<wk.n;k++){ const y=wk.ly[k], a=(y*W+wk.lx1[k])*4, b=(y*W+wk.lx2[k]+1)*4; for(let i=a;i<b;i++) dst[i]=src[i]; } }
+  function drawLines(im, col, wk){
+    const W=wk.W, m=0xffff, A=col.a, sa=A*0x101, ma=0xffff;
+    const sr=(col.r*0x101*A/255)|0, sg=(col.g*0x101*A/255)|0, sb=(col.b*0x101*A/255)|0;
+    const aa=(m-Math.floor(sa*ma/m))*0x101;
+    for(let k=0;k<wk.n;k++){ const y=wk.ly[k],x1=wk.lx1[k],x2=wk.lx2[k]; let i=(y*W+x1)*4;
+      for(let x=x1;x<=x2;x++){ const dr=im[i],dg=im[i+1],db=im[i+2],da=im[i+3];
+        im[i]  =Math.floor(Math.floor((dr*aa+sr*ma)/m)/256);
+        im[i+1]=Math.floor(Math.floor((dg*aa+sg*ma)/m)/256);
+        im[i+2]=Math.floor(Math.floor((db*aa+sb*ma)/m)/256);
+        im[i+3]=Math.floor(Math.floor((da*aa+sa*ma)/m)/256); i+=4; } }
+  }
+  function differenceFull(a,b,W,H){ let total=0; const n=W*H*4; for(let i=0;i<n;i+=4){ const dr=a[i]-b[i],dg=a[i+1]-b[i+1],db=a[i+2]-b[i+2],da=a[i+3]-b[i+3]; total+=dr*dr+dg*dg+db*db+da*da; } return Math.sqrt(total/(W*H*4))/255; }
+  function differencePartial(wk, before, after, score){
+    const t=wk.target, W=wk.W, H=wk.H; let total=Math.pow(score*255,2)*(W*H*4);
+    for(let k=0;k<wk.n;k++){ const y=wk.ly[k],x1=wk.lx1[k],x2=wk.lx2[k]; let i=(y*W+x1)*4;
+      for(let x=x1;x<=x2;x++){ const tr=t[i],tg=t[i+1],tb=t[i+2],ta=t[i+3];
+        const br=before[i],bg=before[i+1],bb=before[i+2],ba=before[i+3];
+        const ar=after[i],ag=after[i+1],ab=after[i+2],av=after[i+3];
+        const a1=tr-br,b1=tg-bg,c1=tb-bb,d1=ta-ba, a2=tr-ar,b2=tg-ag,c2=tb-ab,d2=ta-av;
+        total -= a1*a1+b1*b1+c1*c1+d1*d1; total += a2*a2+b2*b2+c2*c2+d2*d2; i+=4; } }
+    if(total<0) total=0; return Math.sqrt(total/(W*H*4))/255;
+  }
+
+  /* ---- scanline rasterizers (write cropped scanlines into wk) ---- */
+  function cropAdd(wk,n,y,x1,x2){ const W=wk.W,H=wk.H; if(y<0||y>=H)return n; if(x1>=W||x2<0)return n; if(x1<0)x1=0; if(x2>=W)x2=W-1; if(x1>x2)return n; if(n>=wk.ly.length)return n; wk.ly[n]=y;wk.lx1[n]=x1;wk.lx2[n]=x2; return n+1; }
+  function triBottom(wk,n,x1,y1,x2,y2,x3,y3){ const s1=(x2-x1)/(y2-y1), s2=(x3-x1)/(y3-y1); let ax=x1,bx=x1; for(let y=y1;y<=y2;y++){ let a=Math.trunc(ax),b=Math.trunc(bx); ax+=s1;bx+=s2; if(a>b){const t=a;a=b;b=t;} n=cropAdd(wk,n,y,a,b); } return n; }
+  function triTop(wk,n,x1,y1,x2,y2,x3,y3){ const s1=(x3-x1)/(y3-y1), s2=(x3-x2)/(y3-y2); let ax=x3,bx=x3; for(let y=y3;y>y1;y--){ ax-=s1;bx-=s2; let a=Math.trunc(ax),b=Math.trunc(bx); if(a>b){const t=a;a=b;b=t;} n=cropAdd(wk,n,y,a,b); } return n; }
+  function rasterTriangle(wk,s){ let x1=s.x1,y1=s.y1,x2=s.x2,y2=s.y2,x3=s.x3,y3=s.y3;
+    if(y1>y3){let t=x1;x1=x3;x3=t;t=y1;y1=y3;y3=t;} if(y1>y2){let t=x1;x1=x2;x2=t;t=y1;y1=y2;y2=t;} if(y2>y3){let t=x2;x2=x3;x3=t;t=y2;y2=y3;y3=t;}
+    let n=0; if(y2===y3) n=triBottom(wk,n,x1,y1,x2,y2,x3,y3); else if(y1===y2) n=triTop(wk,n,x1,y1,x2,y2,x3,y3);
+    else { const x4=x1+Math.trunc(((y2-y1)/(y3-y1))*(x3-x1)), y4=y2; n=triBottom(wk,n,x1,y1,x2,y2,x4,y4); n=triTop(wk,n,x2,y2,x4,y4,x3,y3); } wk.n=n; }
+  function rasterRect(wk,s){ let x1=s.x1,y1=s.y1,x2=s.x2,y2=s.y2; if(x1>x2){const t=x1;x1=x2;x2=t;} if(y1>y2){const t=y1;y1=y2;y2=t;} let n=0; for(let y=y1;y<=y2;y++){ n=cropAdd(wk,n,y,x1,x2); } wk.n=n; }
+  function rasterEllipse(wk,s){ const W=wk.W,H=wk.H, Rx=s.rx,Ry=s.ry, asp=Rx/Ry; let n=0;
+    for(let dy=0;dy<Ry;dy++){ const y1=s.y-dy,y2=s.y+dy; if((y1<0||y1>=H)&&(y2<0||y2>=H)) continue;
+      const ss=Math.trunc(Math.sqrt(Ry*Ry-dy*dy)*asp); let x1=s.x-ss,x2=s.x+ss; if(x1<0)x1=0; if(x2>=W)x2=W-1; if(x1>x2) continue;
+      if(y1>=0&&y1<H&&n<wk.ly.length){ wk.ly[n]=y1;wk.lx1[n]=x1;wk.lx2[n]=x2;n++; }
+      if(y2>=0&&y2<H&&dy>0&&n<wk.ly.length){ wk.ly[n]=y2;wk.lx1[n]=x1;wk.lx2[n]=x2;n++; } } wk.n=n; }
+  function fillPoly(wk,xs,ys,np){ const W=wk.W,H=wk.H; let miny=1e9,maxy=-1e9; for(let i=0;i<np;i++){ if(ys[i]<miny)miny=ys[i]; if(ys[i]>maxy)maxy=ys[i]; }
+    let y0=Math.max(0,Math.ceil(miny-0.5)), y1=Math.min(H-1,Math.floor(maxy-0.5)); let n=0; const xi=wk.xint;
+    for(let y=y0;y<=y1;y++){ const yc=y+0.5; let m=0;
+      for(let i=0,j=np-1;i<np;j=i++){ const yi=ys[i],yj=ys[j]; if((yi<=yc)!==(yj<=yc)){ const t=(yc-yi)/(yj-yi); if(m<xi.length) xi[m++]=xs[i]+t*(xs[j]-xs[i]); } }
+      if(m<2) continue; for(let a=1;a<m;a++){ const v=xi[a]; let b=a-1; while(b>=0&&xi[b]>v){ xi[b+1]=xi[b]; b--; } xi[b+1]=v; }
+      for(let k=0;k+1<m;k+=2){ let xa=Math.ceil(xi[k]-0.5), xb=Math.floor(xi[k+1]-0.5); if(xa<0)xa=0; if(xb>=W)xb=W-1; if(xb>=xa&&n<wk.ly.length){ wk.ly[n]=y;wk.lx1[n]=xa;wk.lx2[n]=xb;n++; } } } wk.n=n; }
+  function rasterRRect(wk,s){ const ang=rad(s.angle), hx=s.sx/2, hy=s.sy/2, ca=Math.cos(ang), sa=Math.sin(ang), R=(x,y)=>[x*ca-y*sa+s.x, x*sa+y*ca+s.y];
+    const a=R(-hx,-hy),b=R(hx,-hy),c=R(hx,hy),d=R(-hx,hy); fillPoly(wk,[a[0],b[0],c[0],d[0]],[a[1],b[1],c[1],d[1]],4); }
+  function rasterREllipse(wk,s){ const N=16, ang=rad(s.angle), ca=Math.cos(ang), sa=Math.sin(ang), xs=[],ys=[];
+    for(let i=0;i<N;i++){ const th=i/N*2*Math.PI, ex=s.rx*Math.cos(th), ey=s.ry*Math.sin(th); xs.push(ex*ca-ey*sa+s.x); ys.push(ex*sa+ey*ca+s.y); } fillPoly(wk,xs,ys,N); }
+  function rasterPolygon(wk,s){ const xs=s.pts.map(p=>p.x), ys=s.pts.map(p=>p.y); fillPoly(wk,xs,ys,s.pts.length); }
+  function rasterize(wk,s){ switch(s.t){ case'triangle':return rasterTriangle(wk,s); case'rectangle':return rasterRect(wk,s); case'ellipse':return rasterEllipse(wk,s); case'rrect':return rasterRRect(wk,s); case'rellipse':return rasterREllipse(wk,s); case'polygon':return rasterPolygon(wk,s); } }
+
+  /* ---- shapes: random / mutate / copy (ports of the Go shape types) ---- */
+  function triValid(t){ const deg=r=>r*180/Math.PI; let a1,a2;
+    { let x1=t.x2-t.x1,y1=t.y2-t.y1,x2=t.x3-t.x1,y2=t.y3-t.y1; const d1=Math.hypot(x1,y1)||1,d2=Math.hypot(x2,y2)||1; x1/=d1;y1/=d1;x2/=d2;y2/=d2; a1=deg(Math.acos(clampF(x1*x2+y1*y2,-1,1))); }
+    { let x1=t.x1-t.x2,y1=t.y1-t.y2,x2=t.x3-t.x2,y2=t.y3-t.y2; const d1=Math.hypot(x1,y1)||1,d2=Math.hypot(x2,y2)||1; x1/=d1;y1/=d1;x2/=d2;y2/=d2; a2=deg(Math.acos(clampF(x1*x2+y1*y2,-1,1))); }
+    const a3=180-a1-a2; return a1>15&&a2>15&&a3>15; }
+  function randomShape(wk,type){ const r=wk.rnd,W=wk.W,H=wk.H;
+    if(type==='any'){ const L=['triangle','rectangle','ellipse','circle','rrect','rellipse','polygon']; return randomShape(wk,L[r.intn(L.length)]); }
+    if(type==='triangle'){ const x1=r.intn(W),y1=r.intn(H); const s={t:'triangle',x1,y1,x2:x1+r.intn(31)-15,y2:y1+r.intn(31)-15,x3:x1+r.intn(31)-15,y3:y1+r.intn(31)-15}; mutate(wk,s); return s; }
+    if(type==='rectangle'){ const x1=r.intn(W),y1=r.intn(H); return {t:'rectangle',x1,y1,x2:clampI(x1+r.intn(32)+1,0,W-1),y2:clampI(y1+r.intn(32)+1,0,H-1)}; }
+    if(type==='ellipse'){ return {t:'ellipse',x:r.intn(W),y:r.intn(H),rx:r.intn(32)+1,ry:r.intn(32)+1,circle:false}; }
+    if(type==='circle'){ const rr=r.intn(32)+1; return {t:'ellipse',x:r.intn(W),y:r.intn(H),rx:rr,ry:rr,circle:true}; }
+    if(type==='rrect'){ const s={t:'rrect',x:r.intn(W),y:r.intn(H),sx:r.intn(32)+1,sy:r.intn(32)+1,angle:r.intn(360)}; mutate(wk,s); return s; }
+    if(type==='rellipse'){ return {t:'rellipse',x:r.f()*W,y:r.f()*H,rx:r.f()*32+1,ry:r.f()*32+1,angle:r.f()*360}; }
+    /* polygon (quadrilateral) */ const x0=r.f()*W,y0=r.f()*H, pts=[{x:x0,y:y0}]; for(let i=1;i<4;i++) pts.push({x:x0+r.f()*40-20,y:y0+r.f()*40-20}); const s={t:'polygon',pts}; mutate(wk,s); return s; }
+  function mutate(wk,s){ const r=wk.rnd,W=wk.W,H=wk.H,m=16, ni=()=>Math.trunc(r.norm()*16);
+    if(s.t==='triangle'){ do{ switch(r.intn(3)){ case 0:s.x1=clampI(s.x1+ni(),-m,W-1+m);s.y1=clampI(s.y1+ni(),-m,H-1+m);break; case 1:s.x2=clampI(s.x2+ni(),-m,W-1+m);s.y2=clampI(s.y2+ni(),-m,H-1+m);break; default:s.x3=clampI(s.x3+ni(),-m,W-1+m);s.y3=clampI(s.y3+ni(),-m,H-1+m); } }while(!triValid(s)); }
+    else if(s.t==='rectangle'){ if(r.intn(2)===0){ s.x1=clampI(s.x1+ni(),0,W-1);s.y1=clampI(s.y1+ni(),0,H-1); } else { s.x2=clampI(s.x2+ni(),0,W-1);s.y2=clampI(s.y2+ni(),0,H-1); } }
+    else if(s.t==='ellipse'){ switch(r.intn(3)){ case 0:s.x=clampI(s.x+ni(),0,W-1);s.y=clampI(s.y+ni(),0,H-1);break; case 1:s.rx=clampI(s.rx+ni(),1,W-1); if(s.circle)s.ry=s.rx; break; default:s.ry=clampI(s.ry+ni(),1,H-1); if(s.circle)s.rx=s.ry; } }
+    else if(s.t==='rrect'){ switch(r.intn(3)){ case 0:s.x=clampI(s.x+ni(),0,W-1);s.y=clampI(s.y+ni(),0,H-1);break; case 1:s.sx=clampI(s.sx+ni(),1,W-1);s.sy=clampI(s.sy+ni(),1,H-1);break; default:s.angle=s.angle+ni(); } }
+    else if(s.t==='rellipse'){ switch(r.intn(3)){ case 0:s.x=clampF(s.x+r.norm()*16,0,W-1);s.y=clampF(s.y+r.norm()*16,0,H-1);break; case 1:s.rx=clampF(s.rx+r.norm()*16,1,W-1);s.ry=clampF(s.ry+r.norm()*16,1,W-1);break; default:s.angle+=r.norm()*32; } }
+    else if(s.t==='polygon'){ if(r.f()<0.25){ const i=r.intn(s.pts.length),j=r.intn(s.pts.length),px=s.pts[i].x,py=s.pts[i].y; s.pts[i].x=s.pts[j].x;s.pts[i].y=s.pts[j].y;s.pts[j].x=px;s.pts[j].y=py; } else { const i=r.intn(s.pts.length); s.pts[i].x=clampF(s.pts[i].x+r.norm()*16,-m,W-1+m); s.pts[i].y=clampF(s.pts[i].y+r.norm()*16,-m,H-1+m); } } }
+  function copyShape(s){ if(s.t==='polygon') return {t:'polygon',pts:s.pts.map(p=>({x:p.x,y:p.y}))}; return Object.assign({},s); }
+
+  /* ---- hill-climbing state + optimiser (ports of state.go / optimize.go) ---- */
+  function newState(wk,shape,alpha){ let ma=false; if(alpha===0){ alpha=128; ma=true; } return {shape,alpha,mutateAlpha:ma,score:-1}; }
+  function energy(wk,shape,alpha){ rasterize(wk,shape); const col=computeColor(wk,alpha); copyLines(wk.buffer,wk.current,wk); drawLines(wk.buffer,col,wk); return differencePartial(wk,wk.current,wk.buffer,wk.score); }
+  function stEnergy(wk,st){ if(st.score<0) st.score=energy(wk,st.shape,st.alpha); return st.score; }
+  function stCopy(st){ return {shape:copyShape(st.shape),alpha:st.alpha,mutateAlpha:st.mutateAlpha,score:st.score}; }
+  function stDo(wk,st){ const old={shape:copyShape(st.shape),alpha:st.alpha,score:st.score}; mutate(wk,st.shape); if(st.mutateAlpha) st.alpha=clampI(st.alpha+wk.rnd.intn(21)-10,1,255); st.score=-1; return old; }
+  function stUndo(st,old){ st.shape=old.shape; st.alpha=old.alpha; st.score=old.score; }
+  function hillClimb(wk,st,maxAge){ let state=stCopy(st), best=stCopy(st), bestE=stEnergy(wk,state); const cap=maxAge*20+50;
+    for(let age=0,step=0; age<maxAge && step<cap; age++,step++){ const undo=stDo(wk,state); const e=stEnergy(wk,state); if(e>=bestE){ stUndo(state,undo); } else { bestE=e; best=stCopy(state); age=-1; } } return best; }
+  function bestRandomState(wk,type,alpha,n){ let best=null,bestE=0; for(let i=0;i<n;i++){ const s=newState(wk,randomShape(wk,type),alpha); const e=stEnergy(wk,s); if(i===0||e<bestE){ bestE=e; best=s; } } return best; }
+  function bestHillClimbState(wk,type,alpha,n,age,m){ let best=null,bestE=0; for(let i=0;i<m;i++){ let s=bestRandomState(wk,type,alpha,n); s=hillClimb(wk,s,age); const e=stEnergy(wk,s); if(i===0||e<bestE){ bestE=e; best=s; } } return best; }
+  function addShape(wk,model,shape,alpha){ rasterize(wk,shape); const col=computeColor(wk,alpha); copyLines(wk.buffer,wk.current,wk); drawLines(wk.current,col,wk); wk.score=differencePartial(wk,wk.buffer,wk.current,wk.score); model.shapes.push({shape:copyShape(shape),color:col,alpha}); }
+  function step(wk,model,type,alpha,n,age,m){ const st=bestHillClimbState(wk,type,alpha,n,age,m); addShape(wk,model,st.shape,st.alpha); }
+
+  /* ---- final render: draw committed shapes with canvas 2D (anti-aliased) ---- */
+  function drawShape(ctx,s,col,alpha){ ctx.fillStyle='rgba('+col.r+','+col.g+','+col.b+','+(alpha/255).toFixed(4)+')';
+    switch(s.t){
+      case 'triangle': ctx.beginPath(); ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2); ctx.lineTo(s.x3,s.y3); ctx.closePath(); ctx.fill(); break;
+      case 'rectangle': { let x1=s.x1,y1=s.y1,x2=s.x2,y2=s.y2; if(x1>x2){const u=x1;x1=x2;x2=u;} if(y1>y2){const u=y1;y1=y2;y2=u;} ctx.fillRect(x1,y1,x2-x1+1,y2-y1+1); break; }
+      case 'ellipse': ctx.beginPath(); ctx.ellipse(s.x,s.y,Math.max(0.5,s.rx),Math.max(0.5,s.ry),0,0,2*Math.PI); ctx.fill(); break;
+      case 'rrect': ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(rad(s.angle)); ctx.fillRect(-s.sx/2,-s.sy/2,s.sx,s.sy); ctx.restore(); break;
+      case 'rellipse': ctx.beginPath(); ctx.ellipse(s.x,s.y,Math.max(0.5,s.rx),Math.max(0.5,s.ry),rad(s.angle),0,2*Math.PI); ctx.fill(); break;
+      case 'polygon': ctx.beginPath(); ctx.moveTo(s.pts[0].x,s.pts[0].y); for(let i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i].x,s.pts[i].y); ctx.closePath(); ctx.fill(); break;
+    } }
+  const QUAL={ low:[60,30,1], medium:[120,60,1], high:[300,110,1] };   // [random candidates, hill-climb age, restarts]
+  async function render(srcCanvas, opts, alive){
+    const detail=clampI(opts.detail||192, 48, 400);
+    const sw=srcCanvas.width, sh=srcCanvas.height, aspect=sw/sh;
+    let W,H; if(aspect>=1){ W=detail; H=Math.max(1,Math.round(detail/aspect)); } else { H=detail; W=Math.max(1,Math.round(detail*aspect)); }
+    const small=newCanvas(W,H), sctx=small.getContext('2d'); sctx.imageSmoothingEnabled=true; sctx.drawImage(srcCanvas,0,0,W,H);
+    const target=sctx.getImageData(0,0,W,H).data;
+    let ar=0,ag=0,ab=0, np=W*H; for(let i=0;i<target.length;i+=4){ ar+=target[i];ag+=target[i+1];ab+=target[i+2]; } const bg={r:Math.round(ar/np),g:Math.round(ag/np),b:Math.round(ab/np)};
+    const wk=makeWorker(W,H,target); wk.rnd=makeRng(opts.seed||1337);
+    wk.current=new Uint8ClampedArray(W*H*4); for(let i=0;i<wk.current.length;i+=4){ wk.current[i]=bg.r;wk.current[i+1]=bg.g;wk.current[i+2]=bg.b;wk.current[i+3]=255; }
+    wk.score=differenceFull(target,wk.current,W,H);
+    const model={shapes:[]};
+    const N=clampI(opts.shapes||80,1,500), type=opts.type||'triangle', alpha=opts.alpha==null?128:clampI(opts.alpha,0,255);
+    const q=QUAL[opts.quality]||QUAL.medium, n=q[0], age=q[1], mm=q[2];
+    let last=performance.now();
+    for(let i=0;i<N;i++){ step(wk,model,type,alpha,n,age,mm);
+      if(performance.now()-last>28){ if(alive && !alive()) return null; await new Promise(r=>setTimeout(r,0)); if(opts.onProgress) opts.onProgress(i+1,N); last=performance.now(); } }
+    // render committed shapes at output resolution (uniform scale → aspect preserved)
+    const outMax=clampI(opts.outputMax||Math.max(sw,sh),64,1400);
+    let OW,OH; if(aspect>=1){ OW=Math.min(sw,outMax); OH=Math.round(OW/aspect); } else { OH=Math.min(sh,outMax); OW=Math.round(OH*aspect); }
+    OW=Math.max(1,OW); OH=Math.max(1,OH);
+    const out=newCanvas(OW,OH), octx=out.getContext('2d'); octx.fillStyle='rgb('+bg.r+','+bg.g+','+bg.b+')'; octx.fillRect(0,0,OW,OH);
+    octx.save(); octx.scale(OW/W, OH/H); octx.translate(0.5,0.5);
+    for(const it of model.shapes) drawShape(octx,it.shape,it.color,it.alpha);
+    octx.restore();
+    return out;
+  }
+  return { render };
 })();
 
 /* ================================================================== */
@@ -1270,6 +1437,27 @@ const NODE_TYPES={
       return GridFx.render(inputs, {count:+p.count, order:p.order, square:!!p.square, gap:+p.gap});
     }
   },
+  primitive:{
+    title:'Primitive', icon:'🔺', inputs:['Image'], async:true,
+    params:[
+      {key:'shapes',label:'Shapes',type:'range',min:5,max:400,step:5,default:80},
+      {key:'ptype',label:'Shape',type:'select',options:[
+        {value:'triangle',label:'Triangles'},{value:'rectangle',label:'Rectangles'},{value:'ellipse',label:'Ellipses'},
+        {value:'circle',label:'Circles'},{value:'rrect',label:'Rotated rectangles'},{value:'rellipse',label:'Rotated ellipses'},
+        {value:'polygon',label:'Quadrilaterals'},{value:'any',label:'Mixed'}],default:'triangle'},
+      {key:'alpha',label:'Opacity (0 = auto)',type:'range',min:0,max:255,step:5,default:128},
+      {key:'quality',label:'Quality',type:'select',options:[{value:'low',label:'Fast'},{value:'medium',label:'Balanced'},{value:'high',label:'Best (slow)'}],default:'medium'},
+      {key:'detail',label:'Detail',type:'range',min:64,max:320,step:16,default:192},
+      {type:'note',label:'Ported from fogleman/primitive · © Michael Fogleman (MIT)',href:'https://github.com/fogleman/primitive'},
+    ],
+    async process(inputs,p,node){
+      const src=inputs[0]; if(!src) return null;
+      const tok=(node._primTok=(node._primTok||0)+1), alive=()=>node._primTok===tok;
+      const out=await PrimitiveFx.render(src,{ shapes:+p.shapes, type:p.ptype, alpha:+p.alpha, quality:p.quality, detail:+p.detail, seed:1337 }, alive);
+      if(!alive()) return node._out||null;   // superseded by a newer run → keep the last result
+      return out;
+    }
+  },
   vampire:{
     title:'Vampire', icon:'🧛', inputs:['Image'],
     params: vampireParams(),
@@ -1330,7 +1518,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','chroma','fill','weave','collage','grid','vampire','fgbg','boxes','channel'];
+const PALETTE=['source','chroma','fill','weave','collage','grid','primitive','vampire','fgbg','boxes','channel'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -1565,6 +1753,10 @@ function buildParams(node,container){
   node._paramEls=[];
   t.params.forEach(pd=>{
     if(pd.heading){ const h=document.createElement('div'); h.className='p-sub'; h.textContent=pd.heading; container.appendChild(h); node._paramEls.push({pd,row:h}); return; }
+    if(pd.type==='note'){ const d=document.createElement('div'); d.className='p-note';
+      if(pd.href){ const a=document.createElement('a'); a.href=pd.href; a.target='_blank'; a.rel='noopener'; a.textContent=pd.label; a.addEventListener('pointerdown',e=>e.stopPropagation()); d.appendChild(a); }
+      else d.textContent=pd.label;
+      container.appendChild(d); node._paramEls.push({pd,row:d}); return; }
     const row=document.createElement('div');
     if(pd.type==='toggle'){
       row.className='p-toggle';
