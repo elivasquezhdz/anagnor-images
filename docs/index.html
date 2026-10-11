@@ -2316,9 +2316,16 @@ function makeZip(files){
   return new Blob([...parts,...central,eocd],{type:'application/zip'});
 }
 const safe=s=>String(s||'').replace(/[^\w.-]+/g,'_').slice(0,60)||'x';
+// Download base name: the input photo's name (first uploaded source); the
+// sample or an empty graph falls back to a generic project name.
+function projectName(){
+  const sources=Object.values(NODES).filter(n=>n.type==='source');
+  const named=sources.find(n=>n.imageName && n._imgId!=='sample' && n.image);
+  return named ? safe(named.imageName) : 'avayn0p-project';
+}
 
 document.getElementById('exportJson').addEventListener('click',()=>{
-  saveBlob(new Blob([JSON.stringify(serializeGraph(),null,2)],{type:'application/json'}), 'avayn0p-project.json');
+  saveBlob(new Blob([JSON.stringify(serializeGraph(),null,2)],{type:'application/json'}), projectName()+'.json');
   toast('Saved project JSON.');
 });
 document.getElementById('exportZip').addEventListener('click',async ()=>{
@@ -2342,7 +2349,7 @@ document.getElementById('exportZip').addEventListener('click',async ()=>{
       'sources/      your original image(s)\n'+
       'results/      each block\'s rendered output (watermarked)\n\n'+
       'Made with avayn0p — https://elivasquezhdz.github.io/anagnor-images/\n')});
-    saveBlob(makeZip(files),'avayn0p-project.zip');
+    saveBlob(makeZip(files),projectName()+'.zip');
     toast('ZIP downloaded ('+files.length+' files).');
   }catch(e){ toast('ZIP failed: '+((e&&e.message)||e)); }
   finally{ btn.disabled=false; btn.textContent=label; }
