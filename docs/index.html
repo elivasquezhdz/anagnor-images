@@ -1289,8 +1289,14 @@ const FgBgFx=(function(){
     const r=Math.max(1,Math.round(px/3)); let Rb=R,Gb=G,Bb=B; for(let k=0;k<3;k++){ Rb=boxBlur(Rb,w,h,r); Gb=boxBlur(Gb,w,h,r); Bb=boxBlur(Bb,w,h,r); }
     const out=new Uint8ClampedArray(src.length); for(let i=0,p=0;i<n;i++,p+=4){ out[p]=Rb[i]; out[p+1]=Gb[i]; out[p+2]=Bb[i]; out[p+3]=255; } return out;
   }
+  async function primitiveData(baseCanvas,w,h,p,alive){            // geometric reconstruction of the whole frame
+    const out=await PrimitiveFx.render(baseCanvas,{ shapes:+p.prShapes, type:p.prType, alpha:+p.prAlpha, quality:p.prQuality, detail:+p.prDetail, seed:1337 }, alive);
+    if(!out) return null;                                          // superseded → caller keeps the last result
+    const t=newCanvas(w,h), tc=t.getContext('2d'); tc.drawImage(out,0,0,w,h);
+    return tc.getImageData(0,0,w,h).data;
+  }
 
-  async function render(srcCanvas,p){
+  async function render(srcCanvas,p,alive){
     const base=scaleToMax(srcCanvas,MAX_DIM), w=base.width, h=base.height, baseData=canvasData(base);
     const rawMask=await segment(base);
     const alphaFg=refine(rawMask,w,h,+p.threshold, +p.grow|0, +p.feather|0);
@@ -1313,6 +1319,7 @@ const FgBgFx=(function(){
         dx:+p.fDx/100, dy:+p.fDy/100, slope:+p.fSlope, hDir:p.fHDir, hStart:+p.fHPct/100, vDir:p.fVDir, vStart:+p.fVPct/100 };
       mod=fillData(baseData,w,h,fp);
     }
+    else if(op==='primitive'){ mod=await primitiveData(base,w,h,p,alive); if(!mod) return null; }
     const src=baseData.data, out=new ImageData(new Uint8ClampedArray(src),w,h), d=out.data;
     for(let i=0,q=0;i<w*h;i++,q+=4){
       const a=onFg?alphaFg[i]:1-alphaFg[i]; if(a<=0) continue;
@@ -1507,20 +1514,35 @@ const NODE_TYPES={
       {key:'target',label:'Operate on',type:'select',options:[{value:'foreground',label:'Foreground'},{value:'background',label:'Background'}],default:'foreground'},
       {key:'operation',label:'Operation',type:'select',options:[
         {value:'invert',label:'Invert colours'},{value:'collage',label:'4-Way Collage'},{value:'chroma',label:'Chroma Shift'},
-        {value:'lowres',label:'Low resolution'},{value:'fill',label:'Fill'},{value:'blur',label:'Blur'}],default:'invert'},
+        {value:'lowres',label:'Low resolution'},{value:'fill',label:'Fill'},{value:'blur',label:'Blur'},{value:'primitive',label:'Primitive (shapes)'}],default:'invert'},
       {key:'sections',label:'Sections',type:'range',min:2,max:60,step:1,default:20,showIf:p=>p.operation==='collage'},
       {key:'chromaAmt',label:'Chroma shift',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%',showIf:p=>p.operation==='chroma'},
       {key:'chromaAxis',label:'Chroma axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x',showIf:p=>p.operation==='chroma'},
       {key:'chromaIter',label:'Chroma iterations',type:'range',min:1,max:20,step:1,default:1,showIf:p=>p.operation==='chroma'},
       {key:'lowres',label:'Pixel size',type:'range',min:2,max:60,step:1,default:12,suffix:' px',showIf:p=>p.operation==='lowres'},
       {key:'blur',label:'Blur radius',type:'range',min:0,max:60,step:1,default:12,suffix:' px',showIf:p=>p.operation==='blur'},
+      {key:'prShapes',label:'Shapes',type:'range',min:5,max:400,step:5,default:80,showIf:p=>p.operation==='primitive'},
+      {key:'prType',label:'Shape',type:'select',options:[
+        {value:'triangle',label:'Triangles'},{value:'rectangle',label:'Rectangles'},{value:'ellipse',label:'Ellipses'},
+        {value:'circle',label:'Circles'},{value:'rrect',label:'Rotated rectangles'},{value:'rellipse',label:'Rotated ellipses'},
+        {value:'polygon',label:'Quadrilaterals'},{value:'any',label:'Mixed'}],default:'triangle',showIf:p=>p.operation==='primitive'},
+      {key:'prAlpha',label:'Opacity (0 = auto)',type:'range',min:0,max:255,step:5,default:128,showIf:p=>p.operation==='primitive'},
+      {key:'prQuality',label:'Quality',type:'select',options:[{value:'low',label:'Fast'},{value:'medium',label:'Balanced'},{value:'high',label:'Best (slow)'}],default:'medium',showIf:p=>p.operation==='primitive'},
+      {key:'prDetail',label:'Detail',type:'range',min:64,max:320,step:16,default:192,showIf:p=>p.operation==='primitive'},
       ...fillParams('f',p=>p.operation==='fill'),
       {key:'threshold',label:'Mask threshold',type:'range',min:0,max:1,step:0.01,default:0.5,dp:2},
       {key:'grow',label:'Grow / shrink',type:'range',min:-20,max:20,step:1,default:0,suffix:' px'},
       {key:'feather',label:'Smooth edges',type:'range',min:0,max:30,step:1,default:2,suffix:' px'},
       {key:'showMask',label:'Show mask',type:'toggle',default:false},
     ],
-    process(inputs,p){ const src=inputs[0]; if(!src) return null; return FgBgFx.render(src,p); }
+    async process(inputs,p,node){
+      const src=inputs[0]; if(!src) return null;
+      if(p.operation!=='primitive') return FgBgFx.render(src,p);
+      const tok=(node._fgbgTok=(node._fgbgTok||0)+1), alive=()=>node._fgbgTok===tok;   // cancel a superseded run
+      const out=await FgBgFx.render(src,p,alive);
+      if(out===null && !alive()) return node._out||null;   // superseded → keep the last result
+      return out;
+    }
   },
   boxes:{
     title:'Boxes', icon:'🧩', inputs:['1','2','3','4','5'],
