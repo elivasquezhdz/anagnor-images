@@ -193,6 +193,10 @@
   .dd-opt.sel{background:var(--accent);color:#0b1220;font-weight:600}
   .p-sub{font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;
     font-weight:700;margin:4px 0 7px}
+  .p-btn{display:block;width:100%;background:var(--accent);color:#07090d;border:1px solid var(--accent);
+    border-radius:8px;padding:8px 11px;margin:2px 0 9px;cursor:pointer;font-size:.8rem;font-weight:700}
+  .p-btn:hover{filter:brightness(1.08)}
+  .p-btn:disabled{opacity:.6;cursor:default;filter:none}
   .p-note{font-size:.69rem;color:var(--muted);line-height:1.35;margin:2px 0 9px}
   .p-note a{color:var(--accent-2);text-decoration:none}
   .p-note a:hover{text-decoration:underline}
@@ -329,6 +333,7 @@
   <input type="file" id="importFile" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" hidden>
   <button class="btn" id="openAnim">🎞 Animate</button>
   <button class="btn ghost" id="resetGraph">Reset graph</button>
+  <button class="btn ghost" id="helpBtn" title="How it works" aria-label="Help">❔ Help</button>
 </div>
 
 <div id="main">
@@ -339,7 +344,7 @@
     <svg id="wires"></svg>
     <!-- nodes injected here -->
   </div>
-  <div id="help">
+  <div id="help" hidden>
     <button class="close" id="helpClose" title="Dismiss">×</button>
     <b>How it works.</b> Tap a block in the top bar to drop it on the canvas (or drag it).
     <b>To connect:</b> tap a block's <b>right</b> dot, then tap the target block —
@@ -1333,6 +1338,77 @@ const FgBgFx=(function(){
 })();
 
 /* ================================================================== */
+/*  Frames → video (shared by the Slideshow block)                     */
+/*  MediaRecorder MP4 (WebM fallback); animated-GIF fallback for        */
+/*  browsers without video recording (e.g. some iOS). Watermarked.      */
+/* ================================================================== */
+function pickVideoType(canvas){
+  if(typeof MediaRecorder==='undefined' || typeof canvas.captureStream!=='function') return null;
+  const mp4=['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1.4d002a','video/mp4;codecs=avc1','video/mp4;codecs=h264'];
+  const webm=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+  for(const m of mp4) if(typeof MediaRecorder.isTypeSupported==='function'&&MediaRecorder.isTypeSupported(m)) return {mime:m,ext:'mp4'};
+  for(const m of webm) if(typeof MediaRecorder.isTypeSupported==='function'&&MediaRecorder.isTypeSupported(m)) return {mime:m,ext:'webm'};
+  return null;
+}
+function framesToVideo(frameList, opts){
+  opts=opts||{};
+  const fps=Math.max(1,Math.min(30, opts.fps||2)), bounce=!!opts.bounce, name=opts.name||'slideshow';
+  const status=opts.status||function(){}, frames=(frameList||[]).filter(Boolean);
+  return new Promise((resolve,reject)=>{
+    if(frames.length<2){ reject(new Error('need at least 2 frames')); return; }
+    // canvas size: first frame or the largest frame; even dims, capped
+    const CAP=1280; let W,H;
+    if(opts.fit==='first'){ W=frames[0].width; H=frames[0].height; }
+    else { W=0; H=0; frames.forEach(f=>{ W=Math.max(W,f.width); H=Math.max(H,f.height); }); }
+    const s=Math.min(1,CAP/Math.max(W,H)); W=Math.round(W*s); H=Math.round(H*s); W-=W%2; H-=H%2; W=Math.max(2,W); H=Math.max(2,H);
+    // compose each frame (contain, centred, black bg) and watermark it
+    const comp=frames.map(f=>{ const c=newCanvas(W,H), x=c.getContext('2d'); x.fillStyle='#000'; x.fillRect(0,0,W,H);
+      const fs=Math.min(W/f.width,H/f.height), dw=Math.max(1,Math.round(f.width*fs)), dh=Math.max(1,Math.round(f.height*fs));
+      x.drawImage(f,(W-dw)>>1,(H-dh)>>1,dw,dh); return watermarked(c); });
+    let seq=comp.map((_,i)=>i); if(bounce && comp.length>2) seq=seq.concat(seq.slice(1,-1).reverse());
+    const rec=newCanvas(W,H), rctx=rec.getContext('2d'), vt=pickVideoType(rec);
+    const draw=pos=>{ const f=comp[seq[((pos%seq.length)+seq.length)%seq.length]]; rctx.clearRect(0,0,W,H); rctx.drawImage(f,0,0); };
+    const save=(blob,ext)=>{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name+'.'+ext; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000); };
+    if(vt){
+      let stream,mr; try{ stream=rec.captureStream(fps); mr=new MediaRecorder(stream,{mimeType:vt.mime}); }
+      catch(err){ reject(err); return; }
+      const chunks=[]; mr.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+      mr.onstop=()=>{ save(new Blob(chunks,{type:vt.mime}),vt.ext); resolve({ext:vt.ext,w:W,h:H}); };
+      const frameMs=1000/fps, minFrames=Math.max(seq.length,Math.ceil(fps*1.5)), loops=Math.max(1,Math.ceil(minFrames/seq.length)), total=seq.length*loops;
+      let pos=0; draw(0); try{ mr.start(); }catch(err){ reject(err); return; }
+      const iv=setInterval(()=>{ draw(pos); status(pos+1,total); pos++; if(pos>=total){ clearInterval(iv); setTimeout(()=>{ try{ mr.stop(); }catch(_){} }, frameMs+60); } }, frameMs);
+      return;
+    }
+    // ---- GIF fallback ----
+    if(typeof GIF!=='undefined'){
+      let g; try{ g=new GIF({workers:2,quality:10,workerScript:'vendor/gif.worker.js',width:W,height:H}); }
+      catch(err){ reject(err); return; }
+      const delay=Math.max(20,Math.round(1000/fps));
+      for(const idx of seq) g.addFrame(comp[idx],{delay,copy:true});
+      g.on('progress',p=>status(Math.round(p*100),100));
+      g.on('finished',blob=>{ save(blob,'gif'); resolve({ext:'gif',fallback:true,w:W,h:H}); });
+      g.render(); return;
+    }
+    // ---- last resort: a single watermarked PNG frame ----
+    save(canvasToPngBlob(comp[0]),'png'); resolve({ext:'png',fallback:true,w:W,h:H});
+  });
+}
+async function saveSlideshowVideo(node,btn){
+  try{ await runGraph(); }catch(_){}
+  const frames=node.inputs.map(id=> (id!=null&&NODES[id])?NODES[id]._out:null).filter(Boolean);
+  if(frames.length<2){ toast('Connect at least 2 image blocks to the Slideshow.'); return; }
+  const label=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='● Saving…'; }
+  try{
+    const r=await framesToVideo(frames,{ fps:+node.params.fps, bounce:!!node.params.bounce, fit:node.params.fit,
+      name:projectName()+'_slideshow', status:(p,t)=>{ if(btn) btn.textContent='● '+Math.min(100,Math.round(p/t*100))+'%'; } });
+    toast(r.fallback ? ('Saved '+r.ext.toUpperCase()+' ('+frames.length+' frames) — video capture unavailable here.')
+                     : (r.ext.toUpperCase()+' slideshow saved · '+frames.length+' frames.'));
+  }catch(e){ toast('Slideshow failed: '+((e&&e.message)||e)); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent=label; } }
+}
+
+/* ================================================================== */
 /*  Node type registry                                                 */
 /*  Each type: {title, icon, inputs:[labels], params:[...], process}   */
 /*  process(inputCanvases, params, node) -> canvas | Promise<canvas>   */
@@ -1477,6 +1553,34 @@ const NODE_TYPES={
       return GridFx.render(inputs, {count:+p.count, order:p.order, square:!!p.square, gap:+p.gap});
     }
   },
+  slideshow:{
+    title:'Slideshow', icon:'🎬',
+    inputs:['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15'], dynamicInputs:'count', maxInputs:15,
+    params:[
+      {key:'count',label:'Frames',type:'select',options:Array.from({length:14},(_,i)=>({value:String(i+2),label:String(i+2)})),default:'4'},
+      {key:'fps',label:'Speed (fps)',type:'range',min:1,max:30,step:1,default:2},
+      {key:'bounce',label:'Bounce (ping-pong)',type:'toggle',default:false},
+      {key:'fit',label:'Video size',type:'select',options:[{value:'max',label:'Largest frame'},{value:'first',label:'First frame'}],default:'max'},
+      {type:'button',label:'🎬 Save video',onClick:(node,btn)=>saveSlideshowVideo(node,btn)},
+      {type:'note',label:'Connect up to 15 image blocks — ports 1…N play in order. Saves MP4 (animated GIF where video capture isn’t supported). Watermarked.'},
+    ],
+    process(inputs,p){
+      const fr=inputs.filter(Boolean); if(!fr.length) return null;   // filmstrip preview of the ordered frames
+      const gap=8, aspSum=fr.reduce((s,f)=>s+f.width/Math.max(1,f.height),0), avail=3000-gap*(fr.length+1);
+      let H=150; if(aspSum*H>avail) H=Math.max(40,Math.floor(avail/Math.max(0.01,aspSum)));
+      const ws=fr.map(f=>Math.max(1,Math.round(f.width*H/Math.max(1,f.height))));
+      let totW=gap; ws.forEach(w=>totW+=w+gap);
+      const c=newCanvas(totW,H+2*gap), x=c.getContext('2d');
+      x.fillStyle='#0c0e12'; x.fillRect(0,0,c.width,c.height);
+      let cx=gap;
+      for(let i=0;i<fr.length;i++){ x.drawImage(fr[i],cx,gap,ws[i],H);
+        x.strokeStyle='rgba(255,255,255,.14)'; x.lineWidth=1; x.strokeRect(cx+0.5,gap+0.5,ws[i]-1,H-1);
+        x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(cx+4,gap+4,Math.min(ws[i]-8,20),16);
+        x.fillStyle='#fff'; x.font='bold 12px sans-serif'; x.textBaseline='middle'; x.textAlign='left'; x.fillText(String(i+1),cx+8,gap+13);
+        cx+=ws[i]+gap; }
+      return c;
+    }
+  },
   primitive:{
     title:'Primitive', icon:'🔺', inputs:['Image'], async:true,
     params:[
@@ -1573,7 +1677,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','chroma','fill','weave','collage','grid','primitive','vampire','fgbg','boxes','channel'];
+const PALETTE=['source','chroma','fill','weave','collage','grid','primitive','vampire','fgbg','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -1812,6 +1916,10 @@ function buildParams(node,container){
       if(pd.href){ const a=document.createElement('a'); a.href=pd.href; a.target='_blank'; a.rel='noopener'; a.textContent=pd.label; a.addEventListener('pointerdown',e=>e.stopPropagation()); d.appendChild(a); }
       else d.textContent=pd.label;
       container.appendChild(d); node._paramEls.push({pd,row:d}); return; }
+    if(pd.type==='button'){ const b=document.createElement('button'); b.className='p-btn'; b.textContent=pd.label;
+      b.addEventListener('pointerdown',e=>e.stopPropagation());
+      b.addEventListener('click',e=>{ e.stopPropagation(); if(pd.onClick) pd.onClick(node,b); });
+      container.appendChild(b); node._paramEls.push({pd,row:b}); return; }
     const row=document.createElement('div');
     if(pd.type==='toggle'){
       row.className='p-toggle';
@@ -2286,6 +2394,7 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2200);
 }
 document.getElementById('helpClose').addEventListener('click',()=>{ document.getElementById('help').hidden=true; });
+document.getElementById('helpBtn').addEventListener('click',()=>{ const h=document.getElementById('help'); h.hidden=!h.hidden; });
 
 /* ------------------------------------------------------------------ */
 /*  Reset / init                                                       */
