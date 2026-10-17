@@ -94,7 +94,14 @@
   .pv-head .pv-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pv-body{flex:1 1 auto;display:flex;flex-direction:column;gap:10px;padding:14px;min-height:0}
   #pvCanvas{flex:1 1 auto;min-height:0;width:100%;background:#0b0d12;border:1px solid var(--border);
-    border-radius:10px;object-fit:contain}
+    border-radius:10px;object-fit:contain;cursor:zoom-in;touch-action:manipulation}
+  /* Fullscreen preview (double-tap/click the preview to enlarge) */
+  #fsView{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;
+    background:rgba(8,10,14,.96);backdrop-filter:blur(6px);cursor:zoom-out;touch-action:manipulation}
+  #fsView img{max-width:96vw;max-height:94vh;object-fit:contain;border-radius:6px;box-shadow:0 12px 44px rgba(0,0,0,.6)}
+  #fsClose{position:absolute;top:14px;right:16px;width:46px;height:46px;border-radius:50%;cursor:pointer;
+    border:1px solid var(--border);background:rgba(24,27,34,.92);color:var(--text);font-size:1.5rem;line-height:1}
+  #fsHint{position:absolute;bottom:16px;left:0;right:0;text-align:center;color:var(--muted);font-size:.74rem;pointer-events:none}
   .pv-meta{display:flex;align-items:center;justify-content:space-between;gap:10px}
   .pv-meta .res{color:var(--muted);font-size:.78rem}
   #pvDownload{padding:8px 14px;font-size:.82rem;border-radius:9px}
@@ -371,6 +378,13 @@
 </div>
 
 <div id="ghost" class="chip act" hidden></div>
+
+<!-- Fullscreen preview overlay: double-tap/click the preview image to open. -->
+<div id="fsView" hidden>
+  <img id="fsImg" alt="Full-screen preview">
+  <button id="fsClose" title="Close (Esc)" aria-label="Close full screen">×</button>
+  <div id="fsHint">Tap anywhere, press Esc, or ✕ to close</div>
+</div>
 
 <!-- Global Animate panel: sweep one parameter of one block through the live
      graph, preview it, and export MP4 (WebM fallback where MP4 can't record). -->
@@ -2247,6 +2261,31 @@ pvDownload.addEventListener('click',()=>{
   download(node._out, base+'.png');
 });
 window.addEventListener('resize',()=>{ if(selectedId) refreshPreview(); });
+
+/* ------------------------------------------------------------------ */
+/*  Fullscreen preview — double-tap / double-click the preview image   */
+/* ------------------------------------------------------------------ */
+(function(){
+  const fs=document.getElementById('fsView'), fsImg=document.getElementById('fsImg'),
+        fsClose=document.getElementById('fsClose');
+  function openFS(){
+    const node=selectedId?NODES[selectedId]:null, out=node&&node._out; if(!out) return;
+    try{ fsImg.src=out.toDataURL('image/png'); }catch(e){ return; }
+    fs.hidden=false;
+  }
+  function closeFS(){ fs.hidden=true; fsImg.removeAttribute('src'); }
+  // Double-tap/click detector on the preview canvas (works for touch + mouse).
+  let lastT=0, lastX=0, lastY=0;
+  pvCanvas.addEventListener('pointerup',ev=>{
+    const now=Date.now();
+    if(now-lastT<320 && Math.hypot(ev.clientX-lastX,ev.clientY-lastY)<32){ lastT=0; openFS(); }
+    else { lastT=now; lastX=ev.clientX; lastY=ev.clientY; }
+  });
+  pvCanvas.addEventListener('dblclick',openFS);              // desktop fallback
+  fsClose.addEventListener('click',ev=>{ ev.stopPropagation(); closeFS(); });
+  fs.addEventListener('click',closeFS);                      // tap anywhere closes
+  document.addEventListener('keydown',ev=>{ if(ev.key==='Escape' && !fs.hidden) closeFS(); });
+})();
 
 /* ------------------------------------------------------------------ */
 /*  Sample image so previews render before any upload                  */
