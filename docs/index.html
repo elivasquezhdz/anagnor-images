@@ -380,7 +380,7 @@
     <button class="x" id="animClose" title="Close">×</button>
   </div>
   <div class="anim-body">
-    <div id="animEmpty" class="anim-note" hidden>Add a filter block with a slider (e.g. Chroma Shift, 4-Way Collage, Vampire) and connect it, then reopen Animate.</div>
+    <div id="animEmpty" class="anim-note" hidden>Add a filter block with a slider (e.g. Chroma Shift, 4-Way Collage, Color Grade) and connect it, then reopen Animate.</div>
     <div id="animForm">
       <div class="anim-row"><label>Block</label><select id="animBlock"></select></div>
       <div class="anim-row"><label>Parameter</label><select id="animParam"></select></div>
@@ -1439,8 +1439,37 @@ function fillParams(prefix,vis){
   ];
 }
 
+/* ---- Color Grade presets (named looks) -------------------------------
+   Each preset is a full parameter set. The slider/toggle values load into
+   the block's controls; the non-slider bits (tone curve, colour grading,
+   colour-noise, seed) ride along as a "base" the engine starts from, so a
+   future preset can change the grade, not just the sliders. Add a preset by
+   dropping another entry into COLOR_PRESETS. */
+const PHOTO_UI_KEYS=(()=>{ const k=[]; VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>k.push(it.key))); return k; })();
+const PHOTO_TOGGLE_KEYS=['grainOn','vignetteOn'];
+const PHOTO_BASE_KEYS=['curve','grade_shadows','grade_midtones','grade_highlights','grade_global','grade_blending','color_noise','color_noise_detail','color_noise_smooth','seed'];
+function presetFromFull(full){
+  const ui={}; PHOTO_UI_KEYS.forEach(k=>{ if(k in full) ui[k]=full[k]; });
+  if('strength' in full) ui.strength=Math.round(full.strength*100);      // engine 0..1 → slider 0..100
+  PHOTO_TOGGLE_KEYS.forEach(k=>{ ui[k]= full[k]!==undefined?!!full[k]:true; });
+  const base={}; PHOTO_BASE_KEYS.forEach(k=>{ if(k in full) base[k]=full[k]; });
+  return {ui, base};
+}
+const COLOR_PRESETS={
+  vampire: Object.assign({label:'Vampire 🧛'}, presetFromFull(VampireFx.defaultPreset())),
+  // more presets go here later
+};
+function applyColorPreset(node){
+  const pr=COLOR_PRESETS[node.params.preset]; if(!pr) return;             // unknown → leave controls as-is
+  Object.assign(node.params, pr.ui);
+  node.params._base=JSON.parse(JSON.stringify(pr.base));
+}
 function vampireParams(){
   const D=VampireFx.defaultPreset(), out=[];
+  out.push({key:'preset',label:'Preset',type:'select',
+    options:Object.keys(COLOR_PRESETS).map(k=>({value:k,label:COLOR_PRESETS[k].label})),
+    default:'vampire', onPick:applyColorPreset});
+  out.push({type:'note',label:'Pick a preset to load a look, then fine-tune the sliders below.'});
   VampireFx.GROUPS.forEach(g=>{
     out.push({heading:g.title});
     g.items.forEach(it=>{
@@ -1454,9 +1483,10 @@ function vampireParams(){
   return out;
 }
 function vampPreset(p){
-  const preset=VampireFx.defaultPreset();
+  const preset=Object.assign(VampireFx.defaultPreset(), p._base||{});       // base look (curve/grade/noise)
   VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>{ let v=+p[it.key]; if(it.scale) v*=it.scale; preset[it.key]=v; }));
-  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn; preset.seed=12345;
+  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn;
+  preset.seed=(p._base&&p._base.seed!=null)?p._base.seed:12345;
   return preset;
 }
 
@@ -1603,7 +1633,7 @@ const NODE_TYPES={
     }
   },
   vampire:{
-    title:'Vampire', icon:'🧛', inputs:['Image'],
+    title:'Color Grade', icon:'🎨', inputs:['Image'],
     params: vampireParams(),
     process(inputs,p){
       const src=inputs[0]; if(!src) return null;
@@ -1932,7 +1962,9 @@ function buildParams(node,container){
       const lab=document.createElement('label'); lab.textContent=pd.label;
       let input;
       if(pd.type==='select'){
-        input=buildSelect(pd,node,()=>{ if(t.dynamicInputs===pd.key) rebuildInputs(node); refreshParamVisibility(node); scheduleEval(); });
+        input=buildSelect(pd,node,()=>{ if(t.dynamicInputs===pd.key) rebuildInputs(node);
+          if(pd.onPick){ pd.onPick(node); buildParams(node,container); }   // e.g. load a preset, then reflect its values
+          refreshParamVisibility(node); scheduleEval(); });
         lab.textContent=pd.label; row.appendChild(lab); row.appendChild(input);
       }else if(pd.type==='number'){
         input=document.createElement('input'); input.type='number'; if(pd.min!=null)input.min=pd.min; input.value=node.params[pd.key];
