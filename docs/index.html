@@ -339,6 +339,7 @@
   <button class="btn ghost" id="exportZip" title="Download a ZIP: original image + operations + results">⬇ ZIP</button>
   <input type="file" id="importFile" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" hidden>
   <button class="btn" id="openAnim">🎞 Animate</button>
+  <button class="btn ghost" id="undoBtn" title="Undo last change (⌘/Ctrl+Z) — one step" aria-label="Undo" disabled>↶ Undo</button>
   <button class="btn ghost" id="resetGraph">Reset graph</button>
   <button class="btn ghost" id="helpBtn" title="How it works" aria-label="Help">❔ Help</button>
 </div>
@@ -1747,6 +1748,7 @@ function makeNode(type,x,y){
 function addNode(type,x,y){ const n=makeNode(type,x,y); NODES[n.id]=n; renderNode(n); return n; }
 function duplicateNode(id){
   const n=NODES[id]; if(!n) return;
+  pushUndo();
   const copy=addNode(n.type, n.x+30, n.y+30);
   copy.params=JSON.parse(JSON.stringify(n.params));          // copy all settings
   if(n.type==='source' && n.image){ copy.image=cloneCanvas(n.image); copy.imageName=n.imageName; copy._imgId='dup'+(++nodeSeq); }
@@ -1769,6 +1771,7 @@ function duplicateNode(id){
 }
 function removeNode(id){
   const n=NODES[id]; if(!n) return;
+  pushUndo();
   if(armed) clearArmed();
   // Drop connections that referenced this node.
   Object.values(NODES).forEach(other=>{ other.inputs=other.inputs.map(s=> s===id?null:s); });
@@ -1776,6 +1779,46 @@ function removeNode(id){
   delete NODES[id];
   if(selectedId===id) selectedId=null;
   drawWires(); scheduleEval();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Single-step undo — one snapshot slot; pressing Undo again redoes   */
+/* ------------------------------------------------------------------ */
+let undoSnap=null, undoEditKey=null, undoEditTimer=0;
+function snapshotGraph(){
+  return { sel:selectedId, nodes:Object.values(NODES).map(n=>({
+    id:n.id, type:n.type, x:n.x, y:n.y,
+    params:JSON.parse(JSON.stringify(n.params)), inputs:n.inputs.slice(),
+    image:n.image||null, imageName:n.imageName, _imgId:n._imgId })) };
+}
+function restoreGraph(snap){
+  if(armed) clearArmed(); closeDropdown();
+  Object.keys(NODES).forEach(id=>{ if(NODES[id].el) NODES[id].el.remove(); });
+  NODES={}; selectedId=null;
+  snap.nodes.forEach(s=>{
+    const n={ id:s.id, type:s.type, x:s.x, y:s.y,
+      params:JSON.parse(JSON.stringify(s.params)), inputs:s.inputs.slice(),
+      el:null, thumb:null, _out:null, error:null, image:s.image||null, imageName:s.imageName, _imgId:s._imgId };
+    NODES[n.id]=n; renderNode(n);
+    if(n.type==='source'){ const fn=n.el.querySelector('.fname'); if(fn) fn.textContent=(n._imgId==='sample'||!n.image)?'Using a sample image':(n.imageName||'image'); }
+  });
+  selectedId=(snap.sel && NODES[snap.sel])?snap.sel:null;
+  Object.values(NODES).forEach(n=>{ if(n.el) n.el.classList.toggle('selected', n.id===selectedId); });
+  Object.values(NODES).forEach(positionInPorts);
+  drawWires(); scheduleEval(); refreshPreview();
+}
+function updateUndoBtn(){ const b=document.getElementById('undoBtn'); if(b) b.disabled=!undoSnap; }
+function pushUndo(){ undoSnap=snapshotGraph(); undoEditKey=null; updateUndoBtn(); }   // before a discrete change
+function markEdit(key){                                    // coalesce a continuous control edit into one step
+  if(undoEditKey!==key){ undoSnap=snapshotGraph(); undoEditKey=key; updateUndoBtn(); }
+  clearTimeout(undoEditTimer); undoEditTimer=setTimeout(()=>{ undoEditKey=null; }, 450);
+}
+function doUndo(){
+  if(!undoSnap) return;
+  const now=snapshotGraph();          // keep the current state so a second press redoes
+  restoreGraph(undoSnap);
+  undoSnap=now; undoEditKey=null; updateUndoBtn();
+  toast('Undone — press Undo again to redo.');
 }
 
 /* ------------------------------------------------------------------ */
@@ -1826,6 +1869,7 @@ function renderNode(node){
       const f=e.target.files[0]; if(!f) return;
       try{
         const img=await loadImage(f); const c=scaleToMax(img,1600);
+        pushUndo();
         node.image=cloneCanvas(c);
         node.imageName=(f.name||'image').replace(/\.[^.]+$/,'')||'image';
         node._imgId='up'+Date.now()+'_'+(f.name||'');   // bump so the cache re-evaluates
@@ -1914,7 +1958,7 @@ function buildSelect(pd,node,onChange){
     pd.options.forEach(o=>{
       const b=document.createElement('button'); b.type='button';
       b.className='dd-opt'+(String(o.value)===String(node.params[pd.key])?' sel':''); b.textContent=o.label;
-      b.addEventListener('click',ev=>{ ev.stopPropagation(); node.params[pd.key]=o.value; sync(); closeDropdown(); onChange&&onChange(); });
+      b.addEventListener('click',ev=>{ ev.stopPropagation(); markEdit(node.id+'|'+pd.key); node.params[pd.key]=o.value; sync(); closeDropdown(); onChange&&onChange(); });
       pop.appendChild(b);
     });
     document.body.appendChild(pop);
@@ -1955,7 +1999,7 @@ function buildParams(node,container){
       row.className='p-toggle';
       const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!node.params[pd.key];
       const lb=document.createElement('span'); lb.textContent=pd.label;
-      cb.addEventListener('change',()=>{ node.params[pd.key]=cb.checked; refreshParamVisibility(node); scheduleEval(); });
+      cb.addEventListener('change',()=>{ markEdit(node.id+'|'+pd.key); node.params[pd.key]=cb.checked; refreshParamVisibility(node); scheduleEval(); });
       row.appendChild(cb); row.appendChild(lb);
     }else{
       row.className='p-row';
@@ -1968,13 +2012,13 @@ function buildParams(node,container){
         lab.textContent=pd.label; row.appendChild(lab); row.appendChild(input);
       }else if(pd.type==='number'){
         input=document.createElement('input'); input.type='number'; if(pd.min!=null)input.min=pd.min; input.value=node.params[pd.key];
-        input.addEventListener('input',()=>{ node.params[pd.key]=input.value; scheduleEval(); });
+        input.addEventListener('input',()=>{ markEdit(node.id+'|'+pd.key); node.params[pd.key]=input.value; scheduleEval(); });
         row.appendChild(lab); row.appendChild(input);
       }else{ // range
         const vspan=document.createElement('span'); vspan.className='v'; vspan.textContent=fmtVal(pd,node.params[pd.key]);
         lab.appendChild(vspan);
         input=document.createElement('input'); input.type='range'; input.min=pd.min; input.max=pd.max; input.step=pd.step; input.value=node.params[pd.key];
-        input.addEventListener('input',()=>{ node.params[pd.key]=input.value; vspan.textContent=fmtVal(pd,input.value); scheduleEval(); });
+        input.addEventListener('input',()=>{ markEdit(node.id+'|'+pd.key); node.params[pd.key]=input.value; vspan.textContent=fmtVal(pd,input.value); scheduleEval(); });
         row.appendChild(lab); row.appendChild(input);
       }
       // Prevent node drag / pan when interacting with a control.
@@ -2059,7 +2103,7 @@ function wirePort(node,port){
     }else{
       const idx=+port.dataset.idx;
       if(armed){ connect(armed, node.id, idx); clearArmed(); }     // tap-to-connect target
-      else if(node.inputs[idx]!=null){ node.inputs[idx]=null; drawWires(); scheduleEval(); } // tap connected input to detach
+      else if(node.inputs[idx]!=null){ pushUndo(); node.inputs[idx]=null; drawWires(); scheduleEval(); } // tap connected input to detach
     }
   });
 }
@@ -2124,6 +2168,7 @@ function startWireDrag(srcId, e){
 function connect(srcId,dstId,idx){
   if(srcId===dstId){ toast('A block can\'t feed itself.'); return; }
   if(createsCycle(srcId,dstId)){ toast('That would make a loop.'); return; }
+  pushUndo();
   NODES[dstId].inputs[idx]=srcId;
   drawWires(); scheduleEval();
 }
@@ -2154,7 +2199,7 @@ function drawWires(){
       const a=outPortWorld(srcId), b=inPortWorld(dst.id,idx);
       const path=document.createElementNS('http://www.w3.org/2000/svg','path');
       path.setAttribute('class','wire'); path.setAttribute('d',wirePath(a.x,a.y,b.x,b.y));
-      path.addEventListener('click',e=>{ e.stopPropagation(); dst.inputs[idx]=null; drawWires(); scheduleEval(); });
+      path.addEventListener('click',e=>{ e.stopPropagation(); pushUndo(); dst.inputs[idx]=null; drawWires(); scheduleEval(); });
       wiresSvg.appendChild(path);
     });
     // reflect connected state on input ports
@@ -2402,6 +2447,7 @@ PALETTE.forEach(type=>{
   paletteEl.appendChild(chip);
 });
 function spawnAt(type,clientX,clientY){
+  pushUndo();
   const w=screenToWorld(clientX,clientY);
   const n=addNode(type, Math.round(w.x-110), Math.round(w.y-40));
   selectNode(n.id); scheduleEval();
@@ -2452,6 +2498,13 @@ function toast(msg){
 }
 document.getElementById('helpClose').addEventListener('click',()=>{ document.getElementById('help').hidden=true; });
 document.getElementById('helpBtn').addEventListener('click',()=>{ const h=document.getElementById('help'); h.hidden=!h.hidden; });
+document.getElementById('undoBtn').addEventListener('click',doUndo);
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey) && (e.key==='z'||e.key==='Z') && !e.shiftKey && !e.altKey){
+    const t=e.target; if(t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;   // let fields do their own undo
+    e.preventDefault(); doUndo();
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /*  Reset / init                                                       */
@@ -2465,7 +2518,7 @@ function defaultGraph(){
   chroma.inputs[0]=src.id;
   drawWires(); selectNode(chroma.id); scheduleEval();
 }
-document.getElementById('resetGraph').addEventListener('click',()=>{ defaultGraph(); fitView(); });
+document.getElementById('resetGraph').addEventListener('click',()=>{ pushUndo(); defaultGraph(); fitView(); });
 
 /* ------------------------------------------------------------------ */
 /*  Project export — JSON recipe + ZIP (originals + operations + results) */
@@ -2598,6 +2651,7 @@ document.getElementById('importBtn').addEventListener('click',()=>importFile.cli
 importFile.addEventListener('change',async e=>{
   const f=e.target.files[0]; if(!f) return; importFile.value='';
   try{
+    pushUndo();
     if(/\.zip$/i.test(f.name) || (f.type||'').includes('zip')){
       const map=await readZip(await f.arrayBuffer());
       const pj=map.get('project.json'); if(!pj) throw new Error('no project.json in the ZIP');
