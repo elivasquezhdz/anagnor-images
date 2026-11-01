@@ -623,25 +623,38 @@ const ChromaFx=(function(){
     shiftChannel(baseData,out,w,h,b,dbx,dby);
     return out;
   }
-  // Echo: lay N equidistant copies of each shifted channel (offsets d, 2d … N·d),
-  // combined by "lighten" (max) so the copies read as distinct ghosts. N=1 is a
-  // plain single shift. Channel A goes one way, channel B the opposite (or same).
-  function echo(baseData,w,h,a,b,axis,stepPx,n,mode){
+  // A colour choice → the RGB channels it moves. Primaries are one channel,
+  // secondaries (C/M/Y) are a pair, White is all three. '0'/'1'/'2' kept for
+  // older projects (Red/Green/Blue).
+  function colorChannels(code){
+    switch(String(code)){
+      case '0': return [0]; case '1': return [1]; case '2': return [2];
+      case 'c': return [1,2]; case 'm': return [0,2]; case 'y': return [0,1];
+      case 'w': return [0,1,2];
+      default: { const n=+code; return (n>=0&&n<=2)?[n]:[0]; }
+    }
+  }
+  // Echo: lay N equidistant copies of each shifted channel group (offsets d,
+  // 2d … N·d), combined by "lighten" (max) so the copies read as distinct
+  // ghosts. N=1 is a plain single shift. Group A goes one way, group B the
+  // opposite (or same). chA/chB are arrays of channel indices.
+  function echo(baseData,w,h,chA,chB,axis,stepPx,n,mode){
     const base=baseData.data, out=new ImageData(new Uint8ClampedArray(base),w,h), o=out.data;
     const signB=(mode==='same')?-1:1, horiz=(axis==='x'); n=Math.max(1,n|0);
     for(let y=0;y<h;y++) for(let x=0;x<w;x++){
-      const t=(y*w+x)*4; let ma=0, mb=0;
-      for(let k=1;k<=n;k++){ const off=k*stepPx;
-        const ax=horiz?x+off:x, ay=horiz?y:y+off;
-        if(ax>=0&&ax<w&&ay>=0&&ay<h){ const v=base[(ay*w+ax)*4+a]; if(v>ma) ma=v; }
-        const bx=horiz?x-signB*off:x, by=horiz?y:y-signB*off;
-        if(bx>=0&&bx<w&&by>=0&&by<h){ const v=base[(by*w+bx)*4+b]; if(v>mb) mb=v; }
-      }
-      o[t+a]=ma; o[t+b]=mb;
+      const t=(y*w+x)*4;
+      for(let j=0;j<chA.length;j++){ const ch=chA[j]; let m=0;
+        for(let k=1;k<=n;k++){ const off=k*stepPx, ax=horiz?x+off:x, ay=horiz?y:y+off;
+          if(ax>=0&&ax<w&&ay>=0&&ay<h){ const v=base[(ay*w+ax)*4+ch]; if(v>m) m=v; } }
+        o[t+ch]=m; }
+      for(let j=0;j<chB.length;j++){ const ch=chB[j]; let m=0;
+        for(let k=1;k<=n;k++){ const off=k*stepPx, bx=horiz?x-signB*off:x, by=horiz?y:y-signB*off;
+          if(bx>=0&&bx<w&&by>=0&&by<h){ const v=base[(by*w+bx)*4+ch]; if(v>m) m=v; } }
+        o[t+ch]=m; }
     }
     return out;
   }
-  return {shift, echo};
+  return {shift, echo, colorChannels};
 })();
 
 /* ================================================================== */
@@ -1427,6 +1440,13 @@ async function saveSlideshowVideo(node,btn){
 /*  process(inputCanvases, params, node) -> canvas | Promise<canvas>   */
 /* ================================================================== */
 const RGB_OPTS=[{value:'0',label:'Red'},{value:'1',label:'Green'},{value:'2',label:'Blue'}];
+// Chroma Shift colour choices: primaries (one channel), secondaries (a channel
+// pair) and White (all three → a ghost of the whole frame).
+const CHROMA_OPTS=[
+  {value:'0',label:'Red'},{value:'1',label:'Green'},{value:'2',label:'Blue'},
+  {value:'c',label:'Cyan'},{value:'m',label:'Magenta'},{value:'y',label:'Yellow'},
+  {value:'w',label:'White (all)'},
+];
 const DIR_OPTS=[{value:'left',label:'Left'},{value:'right',label:'Right'},{value:'up',label:'Up'},{value:'down',label:'Down'},{value:'diagonal',label:'Diagonal'}];
 
 function fillParams(prefix,vis){
@@ -1522,8 +1542,8 @@ const NODE_TYPES={
   chroma:{
     title:'Chroma Shift', icon:'🌈', inputs:['Image','Mask'], maskPort:1,
     params:[
-      {key:'channelA',label:'Channel A',type:'select',options:RGB_OPTS,default:'0'},
-      {key:'channelB',label:'Channel B',type:'select',options:RGB_OPTS,default:'2'},
+      {key:'channelA',label:'Colour A',type:'select',options:CHROMA_OPTS,default:'0'},
+      {key:'channelB',label:'Colour B',type:'select',options:CHROMA_OPTS,default:'2'},
       {key:'axis',label:'Axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x'},
       {key:'amount',label:'Shift / spacing',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%'},
       {key:'mode',label:'Direction',type:'select',options:[{value:'opposite',label:'Opposite'},{value:'same',label:'Same'}],default:'opposite'},
@@ -1534,7 +1554,8 @@ const NODE_TYPES={
       const src=inputs[0]; if(!src) return null;
       const w=src.width,h=src.height, base=canvasData(src);
       const stepPx=Math.round(w*(+p.amount)/100), copies=Math.max(1,+p.iterations|0);
-      const out=ChromaFx.echo(base,w,h,+p.channelA,+p.channelB,p.axis,stepPx,copies,p.mode);
+      const chA=ChromaFx.colorChannels(p.channelA), chB=ChromaFx.colorChannels(p.channelB);
+      const out=ChromaFx.echo(base,w,h,chA,chB,p.axis,stepPx,copies,p.mode);
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
     }
   },
