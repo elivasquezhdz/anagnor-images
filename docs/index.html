@@ -623,7 +623,25 @@ const ChromaFx=(function(){
     shiftChannel(baseData,out,w,h,b,dbx,dby);
     return out;
   }
-  return {shift};
+  // Echo: lay N equidistant copies of each shifted channel (offsets d, 2d … N·d),
+  // combined by "lighten" (max) so the copies read as distinct ghosts. N=1 is a
+  // plain single shift. Channel A goes one way, channel B the opposite (or same).
+  function echo(baseData,w,h,a,b,axis,stepPx,n,mode){
+    const base=baseData.data, out=new ImageData(new Uint8ClampedArray(base),w,h), o=out.data;
+    const signB=(mode==='same')?-1:1, horiz=(axis==='x'); n=Math.max(1,n|0);
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      const t=(y*w+x)*4; let ma=0, mb=0;
+      for(let k=1;k<=n;k++){ const off=k*stepPx;
+        const ax=horiz?x+off:x, ay=horiz?y:y+off;
+        if(ax>=0&&ax<w&&ay>=0&&ay<h){ const v=base[(ay*w+ax)*4+a]; if(v>ma) ma=v; }
+        const bx=horiz?x-signB*off:x, by=horiz?y:y-signB*off;
+        if(bx>=0&&bx<w&&by>=0&&by<h){ const v=base[(by*w+bx)*4+b]; if(v>mb) mb=v; }
+      }
+      o[t+a]=ma; o[t+b]=mb;
+    }
+    return out;
+  }
+  return {shift, echo};
 })();
 
 /* ================================================================== */
@@ -1507,16 +1525,16 @@ const NODE_TYPES={
       {key:'channelA',label:'Channel A',type:'select',options:RGB_OPTS,default:'0'},
       {key:'channelB',label:'Channel B',type:'select',options:RGB_OPTS,default:'2'},
       {key:'axis',label:'Axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x'},
-      {key:'amount',label:'Shift',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%'},
+      {key:'amount',label:'Shift / spacing',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%'},
       {key:'mode',label:'Direction',type:'select',options:[{value:'opposite',label:'Opposite'},{value:'same',label:'Same'}],default:'opposite'},
-      {key:'iterations',label:'Iterations',type:'range',min:1,max:20,step:1,default:1},
+      {key:'iterations',label:'Copies',type:'range',min:1,max:20,step:1,default:1},
       MASK_PARAM,
     ],
     process(inputs,p){
       const src=inputs[0]; if(!src) return null;
-      const w=src.width,h=src.height; let out=canvasData(src);
-      const shiftPx=Math.round(w*(+p.amount)/100), iters=Math.max(1,+p.iterations|0);
-      for(let i=0;i<iters;i++) out=ChromaFx.shift(out,w,h,+p.channelA,+p.channelB,p.axis,shiftPx,p.mode);
+      const w=src.width,h=src.height, base=canvasData(src);
+      const stepPx=Math.round(w*(+p.amount)/100), copies=Math.max(1,+p.iterations|0);
+      const out=ChromaFx.echo(base,w,h,+p.channelA,+p.channelB,p.axis,stepPx,copies,p.mode);
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
     }
   },
