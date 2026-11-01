@@ -635,21 +635,22 @@ const ChromaFx=(function(){
     }
   }
   // Echo: lay N equidistant copies of each shifted channel group (offsets d,
-  // 2d … N·d), combined by "lighten" (max) so the copies read as distinct
-  // ghosts. N=1 is a plain single shift. Group A goes one way, group B the
-  // opposite (or same). chA/chB are arrays of channel indices.
-  function echo(baseData,w,h,chA,chB,axis,stepPx,n,mode){
+  // 2d … N·d), combined per channel by "lighten" (max → bright ghosts) or, when
+  // dark is set, "darken" (min → shadow trails). N=1 is a plain single shift.
+  // Group A goes one way, group B the opposite (or same). chA/chB are channel
+  // index arrays.
+  function echo(baseData,w,h,chA,chB,axis,stepPx,n,mode,dark){
     const base=baseData.data, out=new ImageData(new Uint8ClampedArray(base),w,h), o=out.data;
-    const signB=(mode==='same')?-1:1, horiz=(axis==='x'); n=Math.max(1,n|0);
+    const signB=(mode==='same')?-1:1, horiz=(axis==='x'), init=dark?255:0; n=Math.max(1,n|0);
     for(let y=0;y<h;y++) for(let x=0;x<w;x++){
       const t=(y*w+x)*4;
-      for(let j=0;j<chA.length;j++){ const ch=chA[j]; let m=0;
+      for(let j=0;j<chA.length;j++){ const ch=chA[j]; let m=init;
         for(let k=1;k<=n;k++){ const off=k*stepPx, ax=horiz?x+off:x, ay=horiz?y:y+off;
-          if(ax>=0&&ax<w&&ay>=0&&ay<h){ const v=base[(ay*w+ax)*4+ch]; if(v>m) m=v; } }
+          if(ax>=0&&ax<w&&ay>=0&&ay<h){ const v=base[(ay*w+ax)*4+ch]; if(dark?v<m:v>m) m=v; } }
         o[t+ch]=m; }
-      for(let j=0;j<chB.length;j++){ const ch=chB[j]; let m=0;
+      for(let j=0;j<chB.length;j++){ const ch=chB[j]; let m=init;
         for(let k=1;k<=n;k++){ const off=k*stepPx, bx=horiz?x-signB*off:x, by=horiz?y:y-signB*off;
-          if(bx>=0&&bx<w&&by>=0&&by<h){ const v=base[(by*w+bx)*4+ch]; if(v>m) m=v; } }
+          if(bx>=0&&bx<w&&by>=0&&by<h){ const v=base[(by*w+bx)*4+ch]; if(dark?v<m:v>m) m=v; } }
         o[t+ch]=m; }
     }
     return out;
@@ -1547,6 +1548,7 @@ const NODE_TYPES={
       {key:'axis',label:'Axis',type:'select',options:[{value:'x',label:'Horizontal'},{value:'y',label:'Vertical'}],default:'x'},
       {key:'amount',label:'Shift / spacing',type:'range',min:0,max:30,step:0.5,default:4,suffix:'%'},
       {key:'mode',label:'Direction',type:'select',options:[{value:'opposite',label:'Opposite'},{value:'same',label:'Same'}],default:'opposite'},
+      {key:'ghost',label:'Ghost tone',type:'select',options:[{value:'light',label:'Light (bright)'},{value:'dark',label:'Dark (shadow)'}],default:'light'},
       {key:'iterations',label:'Copies',type:'range',min:1,max:20,step:1,default:1},
       MASK_PARAM,
     ],
@@ -1555,7 +1557,7 @@ const NODE_TYPES={
       const w=src.width,h=src.height, base=canvasData(src);
       const stepPx=Math.round(w*(+p.amount)/100), copies=Math.max(1,+p.iterations|0);
       const chA=ChromaFx.colorChannels(p.channelA), chB=ChromaFx.colorChannels(p.channelB);
-      const out=ChromaFx.echo(base,w,h,chA,chB,p.axis,stepPx,copies,p.mode);
+      const out=ChromaFx.echo(base,w,h,chA,chB,p.axis,stepPx,copies,p.mode,p.ghost==='dark');
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
     }
   },
