@@ -29,6 +29,7 @@ node-graph editor around them is new.
 |-------|:------:|--------------|
 | 🖼️ **Image** | – | The source. Uses a built-in sample until you upload your own. |
 | 🌈 **Chroma Shift** | 1 | Offsets two colour channels for an RGB-glitch / aberration look (recursive iterations). |
+| 〰️ **Wave Slice** | 1 | Cuts the image into vertical or horizontal slices of selectable thickness and shifts each along a sine wave (frequency, magnitude, phase). Pixels pushed off one edge wrap back in on the opposite edge. |
 | 🪣 **Fill** | 1 | Replicates an edge row/column across a rectangular region — plus diagonal and combined-corner modes. |
 | 🪞 **4-Way Collage** | 1 | Mirrored 2×2 mosaic sliced and interleaved into a kaleidoscope. |
 | 🧛 **Vampire** | 1 | A full Lightroom-style develop preset (exposure, tone, colour grade, grain, vignette…). |

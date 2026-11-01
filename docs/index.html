@@ -1561,6 +1561,42 @@ const NODE_TYPES={
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
     }
   },
+  wave:{
+    title:'Wave Slice', icon:'〰️', inputs:['Image','Mask'], maskPort:1,
+    params:[
+      {key:'slices',label:'Slices',type:'select',options:[
+        {value:'v',label:'Vertical (shift up/down)'},{value:'h',label:'Horizontal (shift left/right)'}],default:'v'},
+      {key:'thick',label:'Slice thickness',type:'range',min:1,max:200,step:1,default:20,suffix:' px'},
+      {key:'freq',label:'Frequency (waves)',type:'range',min:0,max:12,step:0.1,default:2,dp:1},
+      {key:'amp',label:'Magnitude',type:'range',min:0,max:50,step:0.5,default:8,suffix:'%'},
+      {key:'phase',label:'Phase',type:'range',min:0,max:360,step:1,default:0,suffix:'°'},
+      {type:'note',label:'Each slice is pushed along a sine wave; whatever slides off one edge wraps back in on the opposite edge.'},
+      MASK_PARAM,
+    ],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const w=src.width,h=src.height, id=canvasData(src);
+      const out=new ImageData(w,h);
+      const S=new Uint32Array(id.data.buffer), D=new Uint32Array(out.data.buffer);
+      const vert=p.slices!=='h';
+      const along=vert?w:h, across=vert?h:w;                 // slices run along `along`; they shift across
+      const t=Math.max(1,+p.thick|0), freq=+p.freq, ph=(+p.phase)*Math.PI/180;
+      const amp=across*(+p.amp)/100;
+      const mod=(a,n)=>((a%n)+n)%n;
+      for(let s0=0;s0<along;s0+=t){
+        const s1=Math.min(along,s0+t), c=(s0+s1)/2;
+        const off=mod(Math.round(amp*Math.sin(2*Math.PI*freq*c/along+ph)),across);
+        if(vert){
+          for(let y=0;y<h;y++){ const sy=mod(y-off,h), ro=y*w, so=sy*w;
+            for(let x=s0;x<s1;x++) D[ro+x]=S[so+x]; }
+        }else{
+          for(let y=s0;y<s1;y++){ const ro=y*w;
+            for(let x=0;x<w;x++) D[ro+x]=S[ro+mod(x-off,w)]; }
+        }
+      }
+      return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
+    }
+  },
   fill:{
     title:'Fill', icon:'🪣', inputs:['Image','Mask'], maskPort:1,
     params: [...fillParams('',()=>true), MASK_PARAM],
@@ -1749,7 +1785,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','fgbg','chroma','fill','weave','collage','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
+const PALETTE=['source','fgbg','chroma','wave','fill','weave','collage','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
