@@ -27,7 +27,8 @@ node-graph editor around them is new.
 
 | Block | Inputs | What it does |
 |-------|:------:|--------------|
-| 🖼️ **Image** | – | The source. Uses a built-in sample until you upload your own. |
+| 🖼️ **Image** | – | The source. Uses a built-in sample until you upload your own; rotate in 90° steps and flip. |
+| 📐 **Crop & Straighten** | 1 | iOS-Photos-style orientation — Straighten (roll), Vertical (pitch) and Horizontal (yaw) perspective, with auto-fill zoom to hide empty corners — then crop by edge insets and aspect ratio. |
 | 🌈 **Chroma Shift** | 1 | Offsets two colour channels for an RGB-glitch / aberration look (recursive iterations). |
 | 〰️ **Wave Slice** | 1 | Cuts the image into vertical or horizontal slices of selectable thickness and shifts each along a sine wave (frequency, magnitude, phase). Pixels pushed off one edge wrap back in on the opposite edge. |
 | 🪣 **Fill** | 1 | Replicates an edge row/column across a rectangular region — plus diagonal and combined-corner modes. |
