@@ -1198,12 +1198,19 @@ const VampireFx=(function(){
     const amount=(p.grain/100)*0.12;
     for(let i=0,j=0;i<n;i++,j+=3){ let L=LR*img[j]+LG*img[j+1]+LB*img[j+2]; if(L<0)L=0; else if(L>1)L=1; const d=noise[i]*amount*Math.sqrt(1-Math.abs(2*L-1)); img[j]+=d; img[j+1]+=d; img[j+2]+=d; }
   }
+  // Black & white: collapse to one grey from a channel mix (like a colour filter
+  // on B&W film). Colour Grading afterwards can still tone the greys.
+  function monochrome(img,n,mix){
+    let r=+mix[0]||0, g=+mix[1]||0, b=+mix[2]||0; const s=r+g+b||1; r/=s; g/=s; b/=s;
+    for(let i=0,j=0;i<n;i++,j+=3){ const L=r*img[j]+g*img[j+1]+b*img[j+2]; img[j]=L; img[j+1]=L; img[j+2]=L; }
+  }
   function applyLutInPlace(img,n3,lut){ const last=lut.length-1; for(let j=0;j<n3;j++){ let v=img[j]; if(v<0)v=0; else if(v>1)v=1; const xf=v*last; let i0=xf|0; if(i0>last)i0=last; let i1=i0+1>last?last:i0+1; const f=xf-i0; img[j]=lut[i0]*(1-f)+lut[i1]*f; } }
   function process(img0,w,h,p){
     const n=w*h, n3=n*3, img=img0.slice(0), original=p.strength<1?img0:null;
     exposure(img,n3,p.exposure); toneRegions(img,n,p.highlights,p.shadows,p.whites,p.blacks); contrast(img,n3,p.contrast); clip01(img,n3);
     whiteBalance(img,n,n3,p.temp,p.tint); clip01(img,n3); dehaze(img,n,p.dehaze); localContrast(img,n,w,h,p.texture,p.clarity); clip01(img,n3);
     applyLutInPlace(img,n3,monotoneCurveLut(p.curve,1024)); vibranceSaturation(img,n,p.vibrance,p.saturation); clip01(img,n3);
+    if(p.monoOn) monochrome(img,n,p.mono_mix||[LR,LG,LB]);
     colorGrading(img,n,p); clip01(img,n3); colorNoiseReduction(img,n,w,h,p);
     if(p.vignetteOn) vignette(img,w,h,p); if(p.grainOn) grain(img,n,w,h,p,p.seed); clip01(img,n3);
     if(original){ const s=p.strength, is=1-s; for(let j=0;j<n3;j++) img[j]=original[j]*is+img[j]*s; clip01(img,n3); }
@@ -1218,7 +1225,17 @@ const VampireFx=(function(){
       grain:48, grain_size:34, grain_roughness:46, color_noise:21, color_noise_detail:50, color_noise_smooth:50,
       curve:[[0,0],[74,85],[184,135],[255,230]],
       grade_shadows:[0,0,0], grade_midtones:[35,80,0], grade_highlights:[8,85,0], grade_global:[5,85,0],
-      grade_blending:50, strength:1, grainOn:true, vignetteOn:true, seed:12345 };
+      grade_blending:50, strength:1, grainOn:true, vignetteOn:true, monoOn:false, mono_mix:[LR,LG,LB], seed:12345 };
+  }
+  // A do-nothing starting point for building other looks.
+  function neutralPreset(){
+    return { exposure:0, contrast:0, highlights:0, shadows:0, whites:0, blacks:0,
+      temp:0, tint:0, vibrance:0, saturation:0, texture:0, clarity:0, dehaze:0,
+      vignette:0, vignette_midpoint:50, vignette_roundness:0, vignette_feather:50,
+      grain:0, grain_size:25, grain_roughness:50, color_noise:0, color_noise_detail:50, color_noise_smooth:50,
+      curve:[[0,0],[255,255]],
+      grade_shadows:[0,0,0], grade_midtones:[0,0,0], grade_highlights:[0,0,0], grade_global:[0,0,0],
+      grade_blending:50, strength:1, grainOn:false, vignetteOn:false, monoOn:false, mono_mix:[LR,LG,LB], seed:12345 };
   }
   const GROUPS=[
     {title:'Light',items:[
@@ -1249,7 +1266,7 @@ const VampireFx=(function(){
     {title:'Overall',items:[
       {key:'strength',label:'Strength',min:0,max:100,step:1,suffix:'%',scale:0.01} ]},
   ];
-  return {process, toRgb, toImageData, defaultPreset, GROUPS};
+  return {process, toRgb, toImageData, defaultPreset, neutralPreset, GROUPS};
 })();
 
 /* ================================================================== */
@@ -1555,8 +1572,8 @@ function fillParams(prefix,vis){
    future preset can change the grade, not just the sliders. Add a preset by
    dropping another entry into COLOR_PRESETS. */
 const PHOTO_UI_KEYS=(()=>{ const k=[]; VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>k.push(it.key))); return k; })();
-const PHOTO_TOGGLE_KEYS=['grainOn','vignetteOn'];
-const PHOTO_BASE_KEYS=['curve','grade_shadows','grade_midtones','grade_highlights','grade_global','grade_blending','color_noise','color_noise_detail','color_noise_smooth','seed'];
+const PHOTO_TOGGLE_KEYS=['monoOn','grainOn','vignetteOn'];
+const PHOTO_BASE_KEYS=['curve','grade_shadows','grade_midtones','grade_highlights','grade_global','grade_blending','color_noise','color_noise_detail','color_noise_smooth','mono_mix','seed'];
 function presetFromFull(full){
   const ui={}; PHOTO_UI_KEYS.forEach(k=>{ if(k in full) ui[k]=full[k]; });
   if('strength' in full) ui.strength=Math.round(full.strength*100);      // engine 0..1 → slider 0..100
@@ -1564,9 +1581,25 @@ function presetFromFull(full){
   const base={}; PHOTO_BASE_KEYS.forEach(k=>{ if(k in full) base[k]=full[k]; });
   return {ui, base};
 }
+const bwPreset=o=>presetFromFull(Object.assign(VampireFx.neutralPreset(), {monoOn:true}, o));
 const COLOR_PRESETS={
   vampire: Object.assign({label:'Vampire 🧛'}, presetFromFull(VampireFx.defaultPreset())),
-  // more presets go here later
+  // Mono — clean, neutral black & white with a touch of contrast.
+  mono: Object.assign({label:'Mono'}, bwPreset({
+    mono_mix:[0.30,0.59,0.11], contrast:12, clarity:5,
+    curve:[[0,0],[64,58],[192,198],[255,255]] })),
+  // Noir — hard, high-contrast B&W: deep blacks, bright whites, a dark edge and grit.
+  noir: Object.assign({label:'Noir'}, bwPreset({
+    mono_mix:[0.45,0.45,0.10], exposure:-0.10, contrast:65, highlights:-5, whites:35, blacks:-60, clarity:30,
+    curve:[[0,0],[60,18],[128,118],[190,232],[255,255]],
+    vignetteOn:true, vignette:-35, vignette_midpoint:45, vignette_feather:60,
+    grainOn:true, grain:22, grain_size:20, grain_roughness:55 })),
+  // Silvertone — bright, soft B&W with lifted blacks and a faint warm-silver tone.
+  silvertone: Object.assign({label:'Silvertone'}, bwPreset({
+    mono_mix:[0.25,0.65,0.10], exposure:0.15, contrast:-12, highlights:-20, shadows:20, blacks:15,
+    curve:[[0,22],[128,136],[255,248]],
+    grade_shadows:[35,30,0], grade_highlights:[205,14,0], grade_blending:60,
+    grainOn:true, grain:10, grain_size:15, grain_roughness:30 })),
 };
 function applyColorPreset(node){
   const pr=COLOR_PRESETS[node.params.preset]; if(!pr) return;             // unknown → leave controls as-is
@@ -1587,6 +1620,7 @@ function vampireParams(){
     });
   });
   out.push({heading:'Toggles'});
+  out.push({key:'monoOn',label:'Black & white',type:'toggle',default:false});
   out.push({key:'grainOn',label:'Film grain',type:'toggle',default:true});
   out.push({key:'vignetteOn',label:'Vignette',type:'toggle',default:true});
   return out;
@@ -1594,7 +1628,7 @@ function vampireParams(){
 function vampPreset(p){
   const preset=Object.assign(VampireFx.defaultPreset(), p._base||{});       // base look (curve/grade/noise)
   VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>{ let v=+p[it.key]; if(it.scale) v*=it.scale; preset[it.key]=v; }));
-  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn;
+  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn; preset.monoOn=!!p.monoOn;
   preset.seed=(p._base&&p._base.seed!=null)?p._base.seed:12345;
   return preset;
 }

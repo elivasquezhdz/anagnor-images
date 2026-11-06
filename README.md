@@ -33,7 +33,7 @@ node-graph editor around them is new.
 | 〰️ **Wave Slice** | 1 | Cuts the image into vertical or horizontal slices of selectable thickness and shifts each along a sine wave (frequency, magnitude, phase). Pixels pushed off one edge wrap back in on the opposite edge. |
 | 🪣 **Fill** | 1 | Replicates an edge row/column across a rectangular region — plus diagonal and combined-corner modes. |
 | 🪞 **4-Way Collage** | 1 | Mirrored 2×2 mosaic sliced and interleaved into a kaleidoscope. |
-| 🧛 **Vampire** | 1 | A full Lightroom-style develop preset (exposure, tone, colour grade, grain, vignette…). |
+| 🎨 **Color Grade** | 1 | A full Lightroom-style develop panel (exposure, tone, colour grade, grain, vignette, black & white…) with presets: **Vampire**, **Mono**, **Noir** and **Silvertone**. |
 | 🧍 **Foreground / Background** | 1 | Segments the subject with [MediaPipe Selfie Segmentation](https://google.github.io/mediapipe/solutions/selfie_segmentation) (runs in-browser) and applies an operation to the **foreground** or the **background**: invert, collage, chroma, low-res, fill or blur. |
 | 🧩 **Boxes** | 2–5 | Splits each image into an `N×N` grid and interleaves the cells between images. |
 | 🎛️ **Channel Merge** | 1–6 | Tints each input by luminance into a colour layer (R/G/B/C/Y/M) and adds them (additive light). |
