@@ -659,6 +659,56 @@ const ChromaFx=(function(){
 })();
 
 /* ================================================================== */
+/*  Palette: dominant colours (median cut) + a swatch strip            */
+/* ================================================================== */
+const PaletteFx=(function(){
+  const lum=(r,g,b)=>0.299*r+0.587*g+0.114*b;
+  function samplePixels(src,maxSide){
+    const s=Math.min(1,maxSide/Math.max(src.width,src.height));
+    const w=Math.max(1,Math.round(src.width*s)), h=Math.max(1,Math.round(src.height*s));
+    const c=newCanvas(w,h), x=c.getContext('2d'); x.imageSmoothingEnabled=true; x.drawImage(src,0,0,w,h);
+    const d=x.getImageData(0,0,w,h).data, px=[];
+    for(let i=0;i<d.length;i+=4){ if(d[i+3]<8) continue; px.push([d[i],d[i+1],d[i+2]]); }
+    return px;
+  }
+  function rangeOf(px){ let mn=[255,255,255], mx=[0,0,0];
+    for(const p of px) for(let k=0;k<3;k++){ if(p[k]<mn[k])mn[k]=p[k]; if(p[k]>mx[k])mx[k]=p[k]; }
+    return [mn,mx]; }
+  function longest(mn,mx){ const d=[mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]]; let a=0; if(d[1]>d[a])a=1; if(d[2]>d[a])a=2; return [a,d[a]]; }
+  // Median cut: split the widest box along its longest axis until N boxes.
+  function quantize(px,n){
+    if(!px.length) return [];
+    let boxes=[px];
+    while(boxes.length<n){
+      let bi=-1, best=0;
+      for(let i=0;i<boxes.length;i++){ const b=boxes[i]; if(b.length<2) continue; const [mn,mx]=rangeOf(b); const [,rng]=longest(mn,mx); if(rng>best){ best=rng; bi=i; } }
+      if(bi<0) break;                                        // nothing left wide enough to split
+      const b=boxes[bi], [mn,mx]=rangeOf(b), [axis]=longest(mn,mx);
+      b.sort((p,q)=>p[axis]-q[axis]);
+      const mid=b.length>>1;
+      boxes.splice(bi,1,b.slice(0,mid),b.slice(mid));
+    }
+    return boxes.map(b=>{ let r=0,g=0,bl=0; for(const p of b){ r+=p[0]; g+=p[1]; bl+=p[2]; } const k=b.length||1; return [Math.round(r/k),Math.round(g/k),Math.round(bl/k)]; });
+  }
+  function palette(src,n){
+    const cols=quantize(samplePixels(src,160), Math.max(2,Math.min(8,n|0)));
+    cols.sort((a,b)=>lum(a[0],a[1],a[2])-lum(b[0],b[1],b[2]));   // dark → light
+    return cols;
+  }
+  // Draw the swatch strip across the bottom of the image.
+  function render(src,n){
+    const W=src.width, H=src.height, cols=palette(src,n), k=cols.length||1;
+    const strip=Math.max(28, Math.min(Math.round(H*0.13), 160));
+    const c=newCanvas(W,H), x=c.getContext('2d'); x.drawImage(src,0,0);
+    x.fillStyle='rgba(0,0,0,0.28)'; x.fillRect(0,H-strip-2,W,2);  // thin divider
+    for(let i=0;i<k;i++){ const x0=Math.round(i*W/k), x1=Math.round((i+1)*W/k);
+      x.fillStyle='rgb('+cols[i][0]+','+cols[i][1]+','+cols[i][2]+')'; x.fillRect(x0,H-strip,x1-x0,strip); }
+    return c;
+  }
+  return { palette, render };
+})();
+
+/* ================================================================== */
 /*  Horizontal / Vertical Fill core                                    */
 /* ================================================================== */
 const FillFx=(function(){
@@ -1606,6 +1656,11 @@ const NODE_TYPES={
       return maskApply(src, out, inputs[1], p.maskSide);
     }
   },
+  palette:{
+    title:'Palette', icon:'🖍️', inputs:['Image'],
+    params:[ {key:'colors',label:'Colours',type:'range',min:2,max:8,step:1,default:5} ],
+    process(inputs,p){ const src=inputs[0]; if(!src) return null; return PaletteFx.render(src, +p.colors|0); }
+  },
   grid:{
     title:'Photo Grid', icon:'🪟',
     inputs:['1','2','3','4','5','6','7','8','9'], dynamicInputs:'count', maxInputs:9,
@@ -1749,7 +1804,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','fgbg','chroma','fill','weave','collage','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
+const PALETTE=['source','fgbg','chroma','fill','weave','collage','palette','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
