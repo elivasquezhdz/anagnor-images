@@ -463,17 +463,10 @@ function scaleToMax(canvas,maxSide){
   c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);
   return c;
 }
-/* Image-block transforms: crop (percent insets) → rotate 90° steps → flip.
+/* Image-block transforms: rotate 90° steps → flip.
    Returns the source untouched when every option is at its default. */
 function transformSource(src,p){
   if(!src) return src; let c=src;
-  if(p.crop){
-    const w=c.width,h=c.height;
-    let l=Math.round(w*(+p.cropL||0)/100), r=Math.round(w*(+p.cropR||0)/100);
-    let t=Math.round(h*(+p.cropT||0)/100), b=Math.round(h*(+p.cropB||0)/100);
-    const cw=w-l-r, ch=h-t-b;
-    if((l||r||t||b) && cw>=1 && ch>=1){ const cc=newCanvas(cw,ch); cc.getContext('2d').drawImage(c,l,t,cw,ch,0,0,cw,ch); c=cc; }
-  }
   const rot=((Math.round(+p.rotate||0)%360)+360)%360;
   if(rot===90||rot===180||rot===270){
     const swap=(rot===90||rot===270), rc=newCanvas(swap?c.height:c.width, swap?c.width:c.height), rx=rc.getContext('2d');
@@ -485,6 +478,88 @@ function transformSource(src,p){
   }
   return c;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Crop & Straighten core — iOS-Photos-style orientation + crop        */
+/*  The photo is treated as a flat card in 3-D: Roll spins it in-plane  */
+/*  (straighten), Pitch tilts it about the horizontal axis (vertical    */
+/*  keystone), Yaw turns it about the vertical axis (horizontal         */
+/*  keystone). It's re-projected through a pinhole camera; with Auto    */
+/*  fill on, the result zooms in just enough to hide the empty corners. */
+/*  Then the percent insets and the aspect ratio crop the frame.        */
+/* ------------------------------------------------------------------ */
+const CropFx=(function(){
+  const D2R=Math.PI/180;
+  // Homography (centred coords) for the rotated card seen by a camera at distance f.
+  function homography(w,h,roll,pitch,yaw){
+    const f=Math.max(w,h)*1.2;                                   // ~45° field of view
+    const a=pitch*D2R, b=yaw*D2R, c=roll*D2R;
+    const ca=Math.cos(a),sa=Math.sin(a),cb=Math.cos(b),sb=Math.sin(b),cc=Math.cos(c),sc=Math.sin(c);
+    // R = Ry(yaw)·Rx(pitch)·Rz(roll); only its first two columns matter (card lies at z=0).
+    const Rz=[[cc,-sc,0],[sc,cc,0],[0,0,1]], Rx=[[1,0,0],[0,ca,-sa],[0,sa,ca]], Ry=[[cb,0,sb],[0,1,0],[-sb,0,cb]];
+    const mul=(A,B)=>A.map((r,i)=>[0,1,2].map(j=>r[0]*B[0][j]+r[1]*B[1][j]+r[2]*B[2][j]));
+    const R=mul(Ry,mul(Rx,Rz));
+    return [R[0][0],R[0][1],0, R[1][0],R[1][1],0, R[2][0]/f,R[2][1]/f,1];
+  }
+  function invert3(m){
+    const [a,b,c,d,e,f,g,h,i]=m, A=e*i-f*h, B=-(d*i-f*g), C=d*h-e*g, det=a*A+b*B+c*C;
+    if(Math.abs(det)<1e-12) return null;
+    return [A/det,-(b*i-c*h)/det,(b*f-c*e)/det, B/det,(a*i-c*g)/det,-(a*f-c*d)/det, C/det,-(a*h-b*g)/det,(a*e-b*d)/det];
+  }
+  // Smallest zoom ≥1 at which every point of the output border lands inside the photo.
+  function fillZoom(Hi,w,h){
+    const pts=[], N=64;
+    for(let k=0;k<=N;k++){ const t=k/N-0.5; pts.push([t*w,-h/2],[t*w,h/2],[-w/2,t*h],[w/2,t*h]); }
+    const inside=z=>pts.every(([u,v])=>{ u/=z; v/=z; const W=Hi[6]*u+Hi[7]*v+Hi[8]; if(W<=0) return false;
+      const x=(Hi[0]*u+Hi[1]*v+Hi[2])/W, y=(Hi[3]*u+Hi[4]*v+Hi[5])/W; return Math.abs(x)<=w/2+1e-6 && Math.abs(y)<=h/2+1e-6; });
+    if(inside(1)) return 1;
+    let lo=1, hi=2; while(!inside(hi) && hi<64) hi*=2;
+    for(let it=0;it<30;it++){ const m=(lo+hi)/2; if(inside(m)) hi=m; else lo=m; }
+    return hi;
+  }
+  function orient(src,roll,pitch,yaw,autoFill){
+    if(!roll && !pitch && !yaw) return src;
+    const w=src.width,h=src.height, H=homography(w,h,roll,pitch,yaw), Hi=invert3(H); if(!Hi) return src;
+    const z=autoFill?fillZoom(Hi,w,h):1;
+    const S=new Uint32Array(canvasData(src).data.buffer), out=new ImageData(w,h), O=out.data, Sb=new Uint8ClampedArray(S.buffer);
+    const cx=w/2, cy=h/2;
+    for(let py=0;py<h;py++){
+      const v=(py+0.5-cy)/z;
+      for(let px=0;px<w;px++){
+        const u=(px+0.5-cx)/z, W=Hi[6]*u+Hi[7]*v+Hi[8]; if(W<=0) continue;
+        const sx=(Hi[0]*u+Hi[1]*v+Hi[2])/W+cx-0.5, sy=(Hi[3]*u+Hi[4]*v+Hi[5])/W+cy-0.5;
+        if(sx<-0.5||sy<-0.5||sx>w-0.5||sy>h-0.5) continue;      // outside the photo → transparent
+        let x0=Math.floor(sx), y0=Math.floor(sy); const fx=sx-x0, fy=sy-y0;
+        let x1=x0+1, y1=y0+1; if(x0<0)x0=0; if(y0<0)y0=0; if(x1>w-1)x1=w-1; if(y1>h-1)y1=h-1;
+        const i00=(y0*w+x0)*4, i10=(y0*w+x1)*4, i01=(y1*w+x0)*4, i11=(y1*w+x1)*4, o=(py*w+px)*4;
+        const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+        for(let ch=0;ch<4;ch++) O[o+ch]=Sb[i00+ch]*w00+Sb[i10+ch]*w10+Sb[i01+ch]*w01+Sb[i11+ch]*w11;
+      }
+    }
+    return dataToCanvas(out);
+  }
+  // Percent insets, then a centred aspect-ratio crop of what's left.
+  function crop(c,p){
+    const w=c.width,h=c.height;
+    let l=Math.round(w*(+p.cropL||0)/100), r=Math.round(w*(+p.cropR||0)/100);
+    let t=Math.round(h*(+p.cropT||0)/100), b=Math.round(h*(+p.cropB||0)/100);
+    let cw=w-l-r, ch=h-t-b; if(cw<1||ch<1){ l=t=0; cw=w; ch=h; }
+    let ratio=0;
+    if(p.aspect==='original') ratio=w/h;
+    else if(p.aspect && p.aspect!=='free'){ const [aw,ah]=p.aspect.split(':').map(Number); if(aw>0&&ah>0) ratio=aw/ah; }
+    if(ratio){
+      if(cw/ch>ratio){ const nw=Math.max(1,Math.round(ch*ratio)); l+=Math.floor((cw-nw)/2); cw=nw; }
+      else { const nh=Math.max(1,Math.round(cw/ratio)); t+=Math.floor((ch-nh)/2); ch=nh; }
+    }
+    if(l===0&&t===0&&cw===w&&ch===h) return c;
+    const cc=newCanvas(cw,ch); cc.getContext('2d').drawImage(c,l,t,cw,ch,0,0,cw,ch); return cc;
+  }
+  function apply(src,p){
+    return crop(orient(src,+p.roll||0,+p.pitch||0,+p.yaw||0,p.autoFill!==false),p);
+  }
+  return {apply};
+})();
+
 function isIOS(){
   const ua=navigator.userAgent||'';
   return /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
@@ -1173,12 +1248,19 @@ const VampireFx=(function(){
     const amount=(p.grain/100)*0.12;
     for(let i=0,j=0;i<n;i++,j+=3){ let L=LR*img[j]+LG*img[j+1]+LB*img[j+2]; if(L<0)L=0; else if(L>1)L=1; const d=noise[i]*amount*Math.sqrt(1-Math.abs(2*L-1)); img[j]+=d; img[j+1]+=d; img[j+2]+=d; }
   }
+  // Black & white: collapse to one grey from a channel mix (like a colour filter
+  // on B&W film). Colour Grading afterwards can still tone the greys.
+  function monochrome(img,n,mix){
+    let r=+mix[0]||0, g=+mix[1]||0, b=+mix[2]||0; const s=r+g+b||1; r/=s; g/=s; b/=s;
+    for(let i=0,j=0;i<n;i++,j+=3){ const L=r*img[j]+g*img[j+1]+b*img[j+2]; img[j]=L; img[j+1]=L; img[j+2]=L; }
+  }
   function applyLutInPlace(img,n3,lut){ const last=lut.length-1; for(let j=0;j<n3;j++){ let v=img[j]; if(v<0)v=0; else if(v>1)v=1; const xf=v*last; let i0=xf|0; if(i0>last)i0=last; let i1=i0+1>last?last:i0+1; const f=xf-i0; img[j]=lut[i0]*(1-f)+lut[i1]*f; } }
   function process(img0,w,h,p){
     const n=w*h, n3=n*3, img=img0.slice(0), original=p.strength<1?img0:null;
     exposure(img,n3,p.exposure); toneRegions(img,n,p.highlights,p.shadows,p.whites,p.blacks); contrast(img,n3,p.contrast); clip01(img,n3);
     whiteBalance(img,n,n3,p.temp,p.tint); clip01(img,n3); dehaze(img,n,p.dehaze); localContrast(img,n,w,h,p.texture,p.clarity); clip01(img,n3);
     applyLutInPlace(img,n3,monotoneCurveLut(p.curve,1024)); vibranceSaturation(img,n,p.vibrance,p.saturation); clip01(img,n3);
+    if(p.monoOn) monochrome(img,n,p.mono_mix||[LR,LG,LB]);
     colorGrading(img,n,p); clip01(img,n3); colorNoiseReduction(img,n,w,h,p);
     if(p.vignetteOn) vignette(img,w,h,p); if(p.grainOn) grain(img,n,w,h,p,p.seed); clip01(img,n3);
     if(original){ const s=p.strength, is=1-s; for(let j=0;j<n3;j++) img[j]=original[j]*is+img[j]*s; clip01(img,n3); }
@@ -1193,7 +1275,17 @@ const VampireFx=(function(){
       grain:48, grain_size:34, grain_roughness:46, color_noise:21, color_noise_detail:50, color_noise_smooth:50,
       curve:[[0,0],[74,85],[184,135],[255,230]],
       grade_shadows:[0,0,0], grade_midtones:[35,80,0], grade_highlights:[8,85,0], grade_global:[5,85,0],
-      grade_blending:50, strength:1, grainOn:true, vignetteOn:true, seed:12345 };
+      grade_blending:50, strength:1, grainOn:true, vignetteOn:true, monoOn:false, mono_mix:[LR,LG,LB], seed:12345 };
+  }
+  // A do-nothing starting point for building other looks.
+  function neutralPreset(){
+    return { exposure:0, contrast:0, highlights:0, shadows:0, whites:0, blacks:0,
+      temp:0, tint:0, vibrance:0, saturation:0, texture:0, clarity:0, dehaze:0,
+      vignette:0, vignette_midpoint:50, vignette_roundness:0, vignette_feather:50,
+      grain:0, grain_size:25, grain_roughness:50, color_noise:0, color_noise_detail:50, color_noise_smooth:50,
+      curve:[[0,0],[255,255]],
+      grade_shadows:[0,0,0], grade_midtones:[0,0,0], grade_highlights:[0,0,0], grade_global:[0,0,0],
+      grade_blending:50, strength:1, grainOn:false, vignetteOn:false, monoOn:false, mono_mix:[LR,LG,LB], seed:12345 };
   }
   const GROUPS=[
     {title:'Light',items:[
@@ -1224,7 +1316,7 @@ const VampireFx=(function(){
     {title:'Overall',items:[
       {key:'strength',label:'Strength',min:0,max:100,step:1,suffix:'%',scale:0.01} ]},
   ];
-  return {process, toRgb, toImageData, defaultPreset, GROUPS};
+  return {process, toRgb, toImageData, defaultPreset, neutralPreset, GROUPS};
 })();
 
 /* ================================================================== */
@@ -1530,8 +1622,8 @@ function fillParams(prefix,vis){
    future preset can change the grade, not just the sliders. Add a preset by
    dropping another entry into COLOR_PRESETS. */
 const PHOTO_UI_KEYS=(()=>{ const k=[]; VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>k.push(it.key))); return k; })();
-const PHOTO_TOGGLE_KEYS=['grainOn','vignetteOn'];
-const PHOTO_BASE_KEYS=['curve','grade_shadows','grade_midtones','grade_highlights','grade_global','grade_blending','color_noise','color_noise_detail','color_noise_smooth','seed'];
+const PHOTO_TOGGLE_KEYS=['monoOn','grainOn','vignetteOn'];
+const PHOTO_BASE_KEYS=['curve','grade_shadows','grade_midtones','grade_highlights','grade_global','grade_blending','color_noise','color_noise_detail','color_noise_smooth','mono_mix','seed'];
 function presetFromFull(full){
   const ui={}; PHOTO_UI_KEYS.forEach(k=>{ if(k in full) ui[k]=full[k]; });
   if('strength' in full) ui.strength=Math.round(full.strength*100);      // engine 0..1 → slider 0..100
@@ -1539,9 +1631,25 @@ function presetFromFull(full){
   const base={}; PHOTO_BASE_KEYS.forEach(k=>{ if(k in full) base[k]=full[k]; });
   return {ui, base};
 }
+const bwPreset=o=>presetFromFull(Object.assign(VampireFx.neutralPreset(), {monoOn:true}, o));
 const COLOR_PRESETS={
   vampire: Object.assign({label:'Vampire 🧛'}, presetFromFull(VampireFx.defaultPreset())),
-  // more presets go here later
+  // Mono — clean, neutral black & white with a touch of contrast.
+  mono: Object.assign({label:'Mono'}, bwPreset({
+    mono_mix:[0.30,0.59,0.11], contrast:12, clarity:5,
+    curve:[[0,0],[64,58],[192,198],[255,255]] })),
+  // Noir — hard, high-contrast B&W: deep blacks, bright whites, a dark edge and grit.
+  noir: Object.assign({label:'Noir'}, bwPreset({
+    mono_mix:[0.45,0.45,0.10], exposure:-0.10, contrast:65, highlights:-5, whites:35, blacks:-60, clarity:30,
+    curve:[[0,0],[60,18],[128,118],[190,232],[255,255]],
+    vignetteOn:true, vignette:-35, vignette_midpoint:45, vignette_feather:60,
+    grainOn:true, grain:22, grain_size:20, grain_roughness:55 })),
+  // Silvertone — bright, soft B&W with lifted blacks and a faint warm-silver tone.
+  silvertone: Object.assign({label:'Silvertone'}, bwPreset({
+    mono_mix:[0.25,0.65,0.10], exposure:0.15, contrast:-12, highlights:-20, shadows:20, blacks:15,
+    curve:[[0,22],[128,136],[255,248]],
+    grade_shadows:[35,30,0], grade_highlights:[205,14,0], grade_blending:60,
+    grainOn:true, grain:10, grain_size:15, grain_roughness:30 })),
 };
 function applyColorPreset(node){
   const pr=COLOR_PRESETS[node.params.preset]; if(!pr) return;             // unknown → leave controls as-is
@@ -1562,6 +1670,7 @@ function vampireParams(){
     });
   });
   out.push({heading:'Toggles'});
+  out.push({key:'monoOn',label:'Black & white',type:'toggle',default:false});
   out.push({key:'grainOn',label:'Film grain',type:'toggle',default:true});
   out.push({key:'vignetteOn',label:'Vignette',type:'toggle',default:true});
   return out;
@@ -1569,7 +1678,7 @@ function vampireParams(){
 function vampPreset(p){
   const preset=Object.assign(VampireFx.defaultPreset(), p._base||{});       // base look (curve/grade/noise)
   VampireFx.GROUPS.forEach(g=>g.items.forEach(it=>{ let v=+p[it.key]; if(it.scale) v*=it.scale; preset[it.key]=v; }));
-  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn;
+  preset.grainOn=!!p.grainOn; preset.vignetteOn=!!p.vignetteOn; preset.monoOn=!!p.monoOn;
   preset.seed=(p._base&&p._base.seed!=null)?p._base.seed:12345;
   return preset;
 }
@@ -1582,13 +1691,35 @@ const NODE_TYPES={
         {value:'0',label:'0°'},{value:'90',label:'90° ↻'},{value:'180',label:'180°'},{value:'270',label:'270° ↺'}],default:'0'},
       {key:'flipH',label:'Flip horizontal',type:'toggle',default:false},
       {key:'flipV',label:'Flip vertical',type:'toggle',default:false},
-      {key:'crop',label:'Crop',type:'toggle',default:false},
-      {key:'cropT',label:'Crop top',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
-      {key:'cropR',label:'Crop right',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
-      {key:'cropB',label:'Crop bottom',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
-      {key:'cropL',label:'Crop left',type:'range',min:0,max:95,step:1,default:0,suffix:'%',showIf:p=>p.crop},
     ],
     process(_,p,node){ return node.image?transformSource(node.image,p):null; }
+  },
+  crop:{
+    title:'Crop & Straighten', icon:'📐', inputs:['Image','Mask'], maskPort:1,
+    params:[
+      {heading:'Orientation'},
+      {key:'roll',label:'Straighten (roll)',type:'range',min:-45,max:45,step:0.5,default:0,suffix:'°',dp:1},
+      {key:'pitch',label:'Vertical (pitch)',type:'range',min:-30,max:30,step:0.5,default:0,suffix:'°',dp:1},
+      {key:'yaw',label:'Horizontal (yaw)',type:'range',min:-30,max:30,step:0.5,default:0,suffix:'°',dp:1},
+      {key:'autoFill',label:'Auto-fill (zoom to hide empty corners)',type:'toggle',default:true},
+      {heading:'Crop'},
+      {key:'aspect',label:'Aspect ratio',type:'select',options:[
+        {value:'free',label:'Freeform'},{value:'original',label:'Original'},{value:'1:1',label:'Square 1:1'},
+        {value:'4:5',label:'4:5'},{value:'3:4',label:'3:4'},{value:'2:3',label:'2:3'},{value:'9:16',label:'9:16'},
+        {value:'5:4',label:'5:4'},{value:'4:3',label:'4:3'},{value:'3:2',label:'3:2'},{value:'16:9',label:'16:9'}],default:'free'},
+      {key:'cropT',label:'Crop top',type:'range',min:0,max:95,step:1,default:0,suffix:'%'},
+      {key:'cropR',label:'Crop right',type:'range',min:0,max:95,step:1,default:0,suffix:'%'},
+      {key:'cropB',label:'Crop bottom',type:'range',min:0,max:95,step:1,default:0,suffix:'%'},
+      {key:'cropL',label:'Crop left',type:'range',min:0,max:95,step:1,default:0,suffix:'%'},
+      MASK_PARAM,
+    ],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const out=CropFx.apply(src,p);
+      // A mask only makes sense when the frame keeps its size (orientation only).
+      if(inputs[1] && out.width===src.width && out.height===src.height) return maskApply(src,out,inputs[1],p.maskSide);
+      return out;
+    }
   },
   chroma:{
     title:'Chroma Shift', icon:'🌈', inputs:['Image','Mask'], maskPort:1,
@@ -1608,6 +1739,42 @@ const NODE_TYPES={
       const stepPx=Math.round(w*(+p.amount)/100), copies=Math.max(1,+p.iterations|0);
       const chA=ChromaFx.colorChannels(p.channelA), chB=ChromaFx.colorChannels(p.channelB);
       const out=ChromaFx.echo(base,w,h,chA,chB,p.axis,stepPx,copies,p.mode,p.ghost==='dark');
+      return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
+    }
+  },
+  wave:{
+    title:'Wave Slice', icon:'〰️', inputs:['Image','Mask'], maskPort:1,
+    params:[
+      {key:'slices',label:'Slices',type:'select',options:[
+        {value:'v',label:'Vertical (shift up/down)'},{value:'h',label:'Horizontal (shift left/right)'}],default:'v'},
+      {key:'thick',label:'Slice thickness',type:'range',min:1,max:200,step:1,default:20,suffix:' px'},
+      {key:'freq',label:'Frequency (waves)',type:'range',min:0,max:12,step:0.1,default:2,dp:1},
+      {key:'amp',label:'Magnitude',type:'range',min:0,max:50,step:0.5,default:8,suffix:'%'},
+      {key:'phase',label:'Phase',type:'range',min:0,max:360,step:1,default:0,suffix:'°'},
+      {type:'note',label:'Each slice is pushed along a sine wave; whatever slides off one edge wraps back in on the opposite edge.'},
+      MASK_PARAM,
+    ],
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      const w=src.width,h=src.height, id=canvasData(src);
+      const out=new ImageData(w,h);
+      const S=new Uint32Array(id.data.buffer), D=new Uint32Array(out.data.buffer);
+      const vert=p.slices!=='h';
+      const along=vert?w:h, across=vert?h:w;                 // slices run along `along`; they shift across
+      const t=Math.max(1,+p.thick|0), freq=+p.freq, ph=(+p.phase)*Math.PI/180;
+      const amp=across*(+p.amp)/100;
+      const mod=(a,n)=>((a%n)+n)%n;
+      for(let s0=0;s0<along;s0+=t){
+        const s1=Math.min(along,s0+t), c=(s0+s1)/2;
+        const off=mod(Math.round(amp*Math.sin(2*Math.PI*freq*c/along+ph)),across);
+        if(vert){
+          for(let y=0;y<h;y++){ const sy=mod(y-off,h), ro=y*w, so=sy*w;
+            for(let x=s0;x<s1;x++) D[ro+x]=S[so+x]; }
+        }else{
+          for(let y=s0;y<s1;y++){ const ro=y*w;
+            for(let x=0;x<w;x++) D[ro+x]=S[ro+mod(x-off,w)]; }
+        }
+      }
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
     }
   },
@@ -1804,7 +1971,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','fgbg','chroma','fill','weave','collage','palette','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
+const PALETTE=['source','crop','fgbg','chroma','wave','fill','weave','collage','palette','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -2738,6 +2905,18 @@ async function loadProject(data, sources){
   }
   for(const nd of data.nodes){ const nid=idMap[nd.id]; if(!nid) continue; const n=NODES[nid];
     (nd.inputs||[]).forEach((src,idx)=>{ if(src!=null && idMap[src] && idx<n.inputs.length) n.inputs[idx]=idMap[src]; }); }
+  // Older projects cropped inside the Image block; move that into a Crop & Straighten block.
+  for(const nd of data.nodes){
+    const sid=idMap[nd.id]; if(!sid || nd.type!=='source' || !nd.params || !nd.params.crop) continue;
+    const ins=['cropT','cropR','cropB','cropL']; if(!ins.some(k=>+nd.params[k]>0)) continue;
+    const consumers=Object.values(NODES).filter(n=>n.id!==sid && n.inputs.includes(sid));
+    const cn=addNode('crop', (+nd.x||0)+300, (+nd.y||0)+40);
+    ins.forEach(k=>cn.params[k]=+nd.params[k]||0);
+    const cp=cn.el.querySelector('.params'); if(cp) buildParams(cn,cp);
+    consumers.forEach(n=>{ n.inputs=n.inputs.map(x=>x===sid?cn.id:x); });
+    cn.inputs[0]=sid;
+  }
+  Object.values(NODES).forEach(n=>{ if(n.type==='source') ['crop','cropT','cropR','cropB','cropL'].forEach(k=>delete n.params[k]); });
   drawWires(); applyView();
   const first=Object.keys(NODES)[0]; if(first) selectNode(first);
   scheduleEval();
