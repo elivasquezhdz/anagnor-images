@@ -1893,29 +1893,36 @@ const NODE_TYPES={
   },
   slideshow:{
     title:'Slideshow', icon:'🎬',
-    inputs:['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15'], dynamicInputs:'count', maxInputs:15,
+    inputs:Array.from({length:25},(_,i)=>String(i+1)), dynamicInputs:'count', maxInputs:25,
     params:[
-      {key:'count',label:'Frames',type:'select',options:Array.from({length:14},(_,i)=>({value:String(i+2),label:String(i+2)})),default:'4'},
+      {key:'count',label:'Frames',type:'select',options:Array.from({length:24},(_,i)=>({value:String(i+2),label:String(i+2)})),default:'4'},
       {key:'fps',label:'Speed (fps)',type:'range',min:1,max:30,step:1,default:2},
       {key:'bounce',label:'Bounce (ping-pong)',type:'toggle',default:false},
       {key:'fit',label:'Video size',type:'select',options:[{value:'max',label:'Largest frame'},{value:'first',label:'First frame'}],default:'max'},
       {type:'button',label:'🎬 Save video',onClick:(node,btn)=>saveSlideshowVideo(node,btn)},
-      {type:'note',label:'Connect up to 15 image blocks — ports 1…N play in order. Saves MP4 (animated GIF where video capture isn’t supported). Watermarked.'},
+      {type:'note',label:'Connect up to 25 image blocks — ports 1…N play in order. Saves MP4 (animated GIF where video capture isn’t supported). Watermarked.'},
     ],
     process(inputs,p){
-      const fr=inputs.filter(Boolean); if(!fr.length) return null;   // filmstrip preview of the ordered frames
-      const gap=8, aspSum=fr.reduce((s,f)=>s+f.width/Math.max(1,f.height),0), avail=3000-gap*(fr.length+1);
-      let H=150; if(aspSum*H>avail) H=Math.max(40,Math.floor(avail/Math.max(0.01,aspSum)));
-      const ws=fr.map(f=>Math.max(1,Math.round(f.width*H/Math.max(1,f.height))));
-      let totW=gap; ws.forEach(w=>totW+=w+gap);
-      const c=newCanvas(totW,H+2*gap), x=c.getContext('2d');
-      x.fillStyle='#0c0e12'; x.fillRect(0,0,c.width,c.height);
-      let cx=gap;
-      for(let i=0;i<fr.length;i++){ x.drawImage(fr[i],cx,gap,ws[i],H);
-        x.strokeStyle='rgba(255,255,255,.14)'; x.lineWidth=1; x.strokeRect(cx+0.5,gap+0.5,ws[i]-1,H-1);
-        x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(cx+4,gap+4,Math.min(ws[i]-8,20),16);
-        x.fillStyle='#fff'; x.font='bold 12px sans-serif'; x.textBaseline='middle'; x.textAlign='left'; x.fillText(String(i+1),cx+8,gap+13);
-        cx+=ws[i]+gap; }
+      if(!inputs.some(Boolean)) return null;                 // nothing connected yet → show the hint
+      // Square contact-sheet preview: side = ceil(√count), empty cells left blank.
+      const n=inputs.length, side=Math.max(1,Math.ceil(Math.sqrt(n)));
+      const gap=6, target=720, S=Math.max(40,Math.floor((target-(side+1)*gap)/side)), dim=side*S+(side+1)*gap;
+      const c=newCanvas(dim,dim), x=c.getContext('2d');
+      x.fillStyle='#0c0e12'; x.fillRect(0,0,dim,dim);
+      for(let idx=0; idx<side*side; idx++){
+        const dx=gap+(idx%side)*(S+gap), dy=gap+Math.floor(idx/side)*(S+gap), img=idx<n?inputs[idx]:null;
+        if(img){
+          x.save(); x.beginPath(); x.rect(dx,dy,S,S); x.clip();
+          const sc=Math.max(S/img.width,S/img.height), w=img.width*sc, h=img.height*sc;
+          x.drawImage(img, dx+(S-w)/2, dy+(S-h)/2, w, h); x.restore();
+          x.strokeStyle='rgba(255,255,255,.14)'; x.lineWidth=1; x.strokeRect(dx+0.5,dy+0.5,S-1,S-1);
+          x.fillStyle='rgba(0,0,0,.55)'; x.fillRect(dx+4,dy+4,22,16);
+          x.fillStyle='#fff'; x.font='bold 12px sans-serif'; x.textBaseline='middle'; x.textAlign='left'; x.fillText(String(idx+1),dx+8,dy+13);
+        } else {
+          x.fillStyle='rgba(255,255,255,.03)'; x.fillRect(dx,dy,S,S);
+          x.strokeStyle='rgba(255,255,255,.09)'; x.setLineDash([5,4]); x.lineWidth=1; x.strokeRect(dx+1,dy+1,S-2,S-2); x.setLineDash([]);
+        }
+      }
       return c;
     }
   },
