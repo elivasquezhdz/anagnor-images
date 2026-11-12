@@ -463,18 +463,14 @@ function scaleToMax(canvas,maxSide){
   c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);
   return c;
 }
-/* Image-block transforms: rotate 90° steps → flip.
-   Returns the source untouched when every option is at its default. */
+/* Image-block transform: rotate in 90° steps.
+   Returns the source untouched when rotation is 0° (flip now lives on Crop & Straighten). */
 function transformSource(src,p){
   if(!src) return src; let c=src;
   const rot=((Math.round(+p.rotate||0)%360)+360)%360;
   if(rot===90||rot===180||rot===270){
     const swap=(rot===90||rot===270), rc=newCanvas(swap?c.height:c.width, swap?c.width:c.height), rx=rc.getContext('2d');
     rx.translate(rc.width/2,rc.height/2); rx.rotate(rot*Math.PI/180); rx.drawImage(c,-c.width/2,-c.height/2); c=rc;
-  }
-  if(p.flipH||p.flipV){
-    const fc=newCanvas(c.width,c.height), fx=fc.getContext('2d');
-    fx.translate(p.flipH?c.width:0, p.flipV?c.height:0); fx.scale(p.flipH?-1:1, p.flipV?-1:1); fx.drawImage(c,0,0); c=fc;
   }
   return c;
 }
@@ -554,8 +550,13 @@ const CropFx=(function(){
     if(l===0&&t===0&&cw===w&&ch===h) return c;
     const cc=newCanvas(cw,ch); cc.getContext('2d').drawImage(c,l,t,cw,ch,0,0,cw,ch); return cc;
   }
+  function flip(c,p){
+    if(!p.flipH && !p.flipV) return c;
+    const fc=newCanvas(c.width,c.height), fx=fc.getContext('2d');
+    fx.translate(p.flipH?c.width:0, p.flipV?c.height:0); fx.scale(p.flipH?-1:1, p.flipV?-1:1); fx.drawImage(c,0,0); return fc;
+  }
   function apply(src,p){
-    return crop(orient(src,+p.roll||0,+p.pitch||0,+p.yaw||0,p.autoFill!==false),p);
+    return flip(crop(orient(src,+p.roll||0,+p.pitch||0,+p.yaw||0,p.autoFill!==false),p),p);
   }
   return {apply};
 })();
@@ -1727,8 +1728,6 @@ const NODE_TYPES={
     params:[
       {key:'rotate',label:'Rotate',type:'select',options:[
         {value:'0',label:'0°'},{value:'90',label:'90° ↻'},{value:'180',label:'180°'},{value:'270',label:'270° ↺'}],default:'0'},
-      {key:'flipH',label:'Flip horizontal',type:'toggle',default:false},
-      {key:'flipV',label:'Flip vertical',type:'toggle',default:false},
     ],
     process(_,p,node){ return node.image?transformSource(node.image,p):null; }
   },
@@ -1740,6 +1739,8 @@ const NODE_TYPES={
       {key:'pitch',label:'Vertical (pitch)',type:'range',min:-30,max:30,step:0.5,default:0,suffix:'°',dp:1},
       {key:'yaw',label:'Horizontal (yaw)',type:'range',min:-30,max:30,step:0.5,default:0,suffix:'°',dp:1},
       {key:'autoFill',label:'Auto-fill (zoom to hide empty corners)',type:'toggle',default:true},
+      {key:'flipH',label:'Flip horizontal',type:'toggle',default:false},
+      {key:'flipV',label:'Flip vertical',type:'toggle',default:false},
       {heading:'Crop'},
       {key:'aspect',label:'Aspect ratio',type:'select',options:[
         {value:'free',label:'Freeform'},{value:'original',label:'Original'},{value:'1:1',label:'Square 1:1'},
