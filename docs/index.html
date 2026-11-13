@@ -399,7 +399,11 @@
     <div id="animForm">
       <div class="anim-row"><label>Block</label><select id="animBlock"></select></div>
       <div class="anim-row"><label>Parameter</label><select id="animParam"></select></div>
-      <div class="anim-two">
+      <div class="anim-row" id="animOrderRow" hidden><label>Move images</label><select id="animOrder">
+        <option value="seq">Sequential — 1→2, 2→3 … last→1</option>
+        <option value="rev">Reverse — 2→1, 3→2 … 1→last</option>
+        <option value="rand">Random</option></select></div>
+      <div class="anim-two" id="animRangeRow">
         <div class="anim-row"><label>From <span id="animFromU" class="u"></span></label><input type="number" id="animFrom" step="any"></div>
         <div class="anim-row"><label>To <span id="animToU" class="u"></span></label><input type="number" id="animTo" step="any"></div>
       </div>
@@ -1390,7 +1394,10 @@ const BoxesFx=(function(){
     if(canvases.length<2) return canvases[0]||null;
     let order=canvases.slice(); if(p.order==='reverse') order.reverse();
     const [W,H]=commonSize(order,p.fit);
-    const srcs=order.map(c=>{ const t=newCanvas(W,H); t.getContext('2d').drawImage(c,0,0,W,H); return t; });
+    let srcs=order.map(c=>{ const t=newCanvas(W,H); t.getContext('2d').drawImage(c,0,0,W,H); return t; });
+    // Animate ▸ "Image positions" sets a transient _perm (slot j shows image _perm[j]).
+    // Applied after sizing, so the frame size stays put while the images trade places.
+    if(Array.isArray(p._perm) && p._perm.length===srcs.length && p._perm.every(i=>Number.isInteger(i)&&i>=0&&i<srcs.length)) srcs=p._perm.map(i=>srcs[i]);
     if(p.mode==='blocksize'){
       let bw,bh;
       if(p.unit==='pct'){ bw=Math.round(W*(+p.blockW)/100); bh=Math.round(H*(+p.blockH)/100); }
@@ -2996,7 +3003,9 @@ importFile.addEventListener('change',async e=>{
 
 /* ------------------------------------------------------------------ */
 /*  Global Animate panel — sweep one parameter of one block through the */
-/*  live graph, preview it, and export MP4 (WebM fallback).            */
+/*  live graph, preview it, and export MP4 (WebM fallback). A Boxes     */
+/*  block can instead animate its image positions (the inputs trade     */
+/*  places: sequential, reverse or random).                             */
 /* ------------------------------------------------------------------ */
 (function(){
   const $=id=>document.getElementById(id);
@@ -3005,15 +3014,32 @@ importFile.addEventListener('change',async e=>{
   const blockSel=$('animBlock'), paramSel=$('animParam');
   const fromIn=$('animFrom'), toIn=$('animTo'), fromU=$('animFromU'), toU=$('animToU');
   const framesIn=$('animFrames'), fpsIn=$('animFps'), loopSel=$('animLoop'), watchSel=$('animWatch');
+  const orderRow=$('animOrderRow'), orderSel=$('animOrder'), rangeRow=$('animRangeRow');
   const prev=$('animPreview'), statusEl=$('animStatus');
   const renderBtn=$('animRender'), playBtn=$('animPlay');
   const exportBtn=$('animExport'), gifBtn=$('animGif'), pngBtn=$('animPng');
   const recCanvas=document.createElement('canvas');   // offscreen: watermarked frames for MP4/GIF export
   const MAX_FRAMES=120, MAX_SIDE=720;
+  const ORDER_KEY='__order';                          // Boxes-only pseudo-parameter: move the input images around
+  const ORDER_LABEL={seq:'sequential',rev:'reverse',rand:'random'};
   let frames=[], seq=[], playing=false, timer=null, recording=false, busy=false, playPos=0;
+  let orderStash=null;                                // Frames/FPS the user had before picking "Image positions"
 
   const rangeParams=node=>NODE_TYPES[node.type].params.filter(p=>p.type==='range');
   const animatable=()=>Object.values(NODES).filter(n=>rangeParams(n).length>0);
+  const connectedCount=node=>node.inputs.filter(id=>id!=null&&NODES[id]).length;
+  // Does nodeId's output depend on upId (same block, or upId somewhere upstream)?
+  function dependsOn(nodeId,upId){
+    if(nodeId===upId) return true;
+    const seen=new Set(), stack=[nodeId];
+    while(stack.length){ const id=stack.pop(); if(seen.has(id)) continue; seen.add(id);
+      const n=NODES[id]; if(!n) continue;
+      for(const s of n.inputs){ if(s==null) continue; if(s===upId) return true; stack.push(s); } }
+    return false;
+  }
+  function orderFrameDefault(n){ return orderSel.value==='rand' ? 12 : Math.max(2,connectedCount(n)); }
+  function enterOrder(n){ if(!orderStash){ orderStash={frames:framesIn.value,fps:fpsIn.value}; fpsIn.value=3; } framesIn.value=orderFrameDefault(n); }
+  function leaveOrder(){ if(orderStash){ framesIn.value=orderStash.frames; fpsIn.value=orderStash.fps; orderStash=null; } }
 
   function populate(){
     const nodes=animatable();
@@ -3027,8 +3053,17 @@ importFile.addEventListener('change',async e=>{
     onBlock();
   }
   function onBlock(){ const n=NODES[blockSel.value]; if(!n) return; paramSel.innerHTML='';
-    rangeParams(n).forEach(p=>{ const o=document.createElement('option'); o.value=p.key; o.textContent=p.label; paramSel.appendChild(o); }); onParam(); }
-  function onParam(){ const n=NODES[blockSel.value]; if(!n) return; const pd=rangeParams(n).find(p=>p.key===paramSel.value); if(!pd) return;
+    rangeParams(n).forEach(p=>{ const o=document.createElement('option'); o.value=p.key; o.textContent=p.label; paramSel.appendChild(o); });
+    if(n.type==='boxes'){ const o=document.createElement('option'); o.value=ORDER_KEY; o.textContent='🔀 Image positions (inputs trade places)'; paramSel.appendChild(o); }
+    onParam(); }
+  function onParam(){ const n=NODES[blockSel.value]; if(!n) return;
+    if(paramSel.value===ORDER_KEY){                 // Boxes: animate where each input image sits
+      orderRow.hidden=false; rangeRow.hidden=true;
+      if(!dependsOn(watchSel.value,n.id)) watchSel.value=n.id;   // Boxes has to be part of what's shown
+      enterOrder(n); resetFrames('The images trade places inside Boxes — press Render.'); return;
+    }
+    orderRow.hidden=true; rangeRow.hidden=false; leaveOrder();
+    const pd=rangeParams(n).find(p=>p.key===paramSel.value); if(!pd) return;
     fromIn.value=pd.min; toIn.value=pd.max; fromIn.step=pd.step||'any'; toIn.step=pd.step||'any';
     fromU.textContent=pd.suffix||''; toU.textContent=pd.suffix||''; resetFrames('Set a range, then press Render.'); }
   function resetFrames(msg){ stopPlay(); frames=[]; seq=[]; playBtn.disabled=true; exportBtn.disabled=true; gifBtn.disabled=true; pngBtn.disabled=true; if(msg) statusEl.textContent=msg; }
@@ -3040,6 +3075,7 @@ importFile.addEventListener('change',async e=>{
   blockSel.addEventListener('change',onBlock);
   paramSel.addEventListener('change',onParam);
   [fromIn,toIn,framesIn,fpsIn].forEach(el=>el.addEventListener('change',()=>resetFrames('Settings changed — press Render.')));
+  orderSel.addEventListener('change',()=>{ const n=NODES[blockSel.value]; if(n) framesIn.value=orderFrameDefault(n); resetFrames('Settings changed — press Render.'); });
   loopSel.addEventListener('change',()=>{ if(frames.length){ buildSeq(); statusEl.textContent=frames.length+' frames ready.'; } });
   openBtn.addEventListener('click',()=>{ panel.hidden=false; populate(); });
   closeBtn.addEventListener('click',()=>{ stopPlay(); panel.hidden=true; });
@@ -3051,10 +3087,59 @@ importFile.addEventListener('change',async e=>{
     timer=setInterval(()=>{ drawFrame(playPos); playPos=(playPos+1)%seq.length; },1000/fps); }
   playBtn.addEventListener('click',()=>{ if(!frames.length)return; playing?stopPlay():play(); });
 
+  // A fresh shuffle that differs from the previous arrangement, so no frame "stalls".
+  function shuffledUnlike(prevPerm){
+    let p=prevPerm.slice();
+    for(let tries=0;tries<24;tries++){
+      p=prevPerm.slice();
+      for(let i=p.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=p[i]; p[i]=p[j]; p[j]=t; }
+      if(p.some((v,i)=>v!==prevPerm[i])) break;
+    }
+    return p;
+  }
+  // Boxes only: instead of sweeping a slider, the connected images trade places
+  // frame by frame. The wiring is untouched — Boxes reads a transient _perm.
+  //   sequential: 1→2, 2→3 … last→1   ·   reverse: 2→1 … 1→last   ·   random: a new shuffle each frame
+  async function renderOrder(node,watch){
+    const mode=orderSel.value, count=Math.max(2,Math.min(MAX_FRAMES,parseInt(framesIn.value,10)||2));
+    busy=true; renderBtn.disabled=true; resetFrames(''); statusEl.textContent='Rendering…';
+    try{
+      delete node.params._perm; await runGraph();
+      const k=node.inputs.filter(id=>id!=null&&NODES[id]&&NODES[id]._out).length;
+      if(k<2){ statusEl.textContent='Connect at least 2 images into Boxes to move them around.'; return; }
+      if(!dependsOn(watch.id,node.id)){ statusEl.textContent='Boxes isn’t part of the “Show output of” chain — pick Boxes or a block after it.'; return; }
+      const o=watch._out;
+      if(!o){ statusEl.textContent='The “Show output of” block has no image yet — connect an image into it.'; return; }
+      const s=Math.min(1,MAX_SIDE/Math.max(o.width,o.height));
+      let fw=Math.round(o.width*s), fh=Math.round(o.height*s); fw-=fw%2; fh-=fh%2; fw=Math.max(2,fw); fh=Math.max(2,fh);
+      const ident=Array.from({length:k},(_,j)=>j); let perm=ident.slice();
+      frames=[];
+      for(let i=0;i<count;i++){
+        if(mode==='rand'){ if(i>0) perm=shuffledUnlike(perm); }
+        else { const st=i%k; perm=ident.map(j=> mode==='rev' ? (j+st)%k : ((j-st)%k+k)%k ); }   // slot j shows image perm[j]
+        node.params._perm=perm.slice(); await runGraph();
+        const oc=watch._out, fc=newCanvas(fw,fh); if(oc) fc.getContext('2d').drawImage(oc,0,0,fw,fh);
+        frames.push(fc); statusEl.textContent='Rendering '+(i+1)+'/'+count+'…';
+        await new Promise(r=>setTimeout(r,0));
+      }
+      delete node.params._perm; await runGraph();
+      buildSeq(); prev.width=fw; prev.height=fh; drawFrame(0);
+      playBtn.disabled=false; exportBtn.disabled=false; gifBtn.disabled=false; pngBtn.disabled=false;
+      exportBtn.textContent='⬇ MP4'; gifBtn.textContent='⬇ GIF'; pngBtn.textContent='⬇ PNG';
+      statusEl.textContent=frames.length+' frames · '+fw+'×'+fh+' · Boxes images: '+(ORDER_LABEL[mode]||mode)+' ('+k+' inputs)';
+      play();
+    }catch(e){ statusEl.textContent='Render failed: '+((e&&e.message)||e); }
+    finally{
+      if('_perm' in node.params){ delete node.params._perm; try{ await runGraph(); }catch(_){} }
+      busy=false; renderBtn.disabled=false;
+    }
+  }
+
   async function render(){
     if(busy) return;
     const node=NODES[blockSel.value], watch=NODES[watchSel.value];
     if(!node||!watch){ statusEl.textContent='Pick a block and an output.'; return; }
+    if(paramSel.value===ORDER_KEY && node.type==='boxes') return renderOrder(node,watch);
     const pd=rangeParams(node).find(p=>p.key===paramSel.value); if(!pd) return;
     const from=parseFloat(fromIn.value), to=parseFloat(toIn.value);
     const count=Math.max(2,Math.min(MAX_FRAMES,parseInt(framesIn.value,10)||30));
