@@ -204,6 +204,8 @@
     border-radius:8px;padding:8px 11px;margin:2px 0 9px;cursor:pointer;font-size:.8rem;font-weight:700}
   .p-btn:hover{filter:brightness(1.08)}
   .p-btn:disabled{opacity:.6;cursor:default;filter:none}
+  .p-btn.ghost{background:var(--panel-3);color:var(--text);border-color:var(--border);font-weight:600}   /* quiet secondary action (e.g. Reset) */
+  .p-btn.ghost:hover{border-color:var(--accent);filter:none}
   .p-note{font-size:.69rem;color:var(--muted);line-height:1.35;margin:2px 0 9px}
   .p-note a{color:var(--accent-2);text-decoration:none}
   .p-note a:hover{text-decoration:underline}
@@ -736,6 +738,98 @@ const ChromaFx=(function(){
     return out;
   }
   return {shift, echo, colorChannels};
+})();
+
+/* ================================================================== */
+/*  Channel Homography core                                            */
+/*  Each colour channel (R, G, B) is re-projected on its own with a     */
+/*  homography — the 8-degree-of-freedom projective transform: move    */
+/*  (2), rotate (1), scale (1), aspect (1), shear (1) and two          */
+/*  perspective terms (2), all about the image centre — and the three  */
+/*  warped channels are put back together. Inverse mapping with        */
+/*  bilinear sampling, so the output keeps the input's size.           */
+/* ================================================================== */
+const HomographyFx=(function(){
+  const D2R=Math.PI/180, EPS=1e-4;
+  const PERSP_MAX=0.45;      // perspective at slider ±100, relative to half the long side (keeps the frame in front of the "camera")
+  // One entry per slider — shared by the block's UI and the engine.
+  const DEFS=[
+    {k:'X',     label:'Move X',      min:-50,  max:50,  step:0.1, def:0,   dp:1, suffix:'%'},
+    {k:'Y',     label:'Move Y',      min:-50,  max:50,  step:0.1, def:0,   dp:1, suffix:'%'},
+    {k:'Rot',   label:'Rotate',      min:-180, max:180, step:0.1, def:0,   dp:1, suffix:'°'},
+    {k:'Scale', label:'Scale',       min:20,   max:300, step:0.5, def:100, dp:1, suffix:'%'},
+    {k:'Aspect',label:'Aspect',      min:-100, max:100, step:1,   def:0,   dp:0},
+    {k:'Shear', label:'Shear',       min:-60,  max:60,  step:0.5, def:0,   dp:1, suffix:'°'},
+    {k:'PX',    label:'Perspective X',min:-100,max:100, step:1,   def:0,   dp:0},
+    {k:'PY',    label:'Perspective Y',min:-100,max:100, step:1,   def:0,   dp:0},
+  ];
+  const EDGES=['clamp','black','wrap','mirror','keep'];
+  const mul=(A,B)=>{ const C=new Array(9); for(let i=0;i<3;i++) for(let j=0;j<3;j++) C[i*3+j]=A[i*3]*B[j]+A[i*3+1]*B[3+j]+A[i*3+2]*B[6+j]; return C; };
+  function inv3(m){
+    const [a,b,c,d,e,f,g,h,i]=m, A=e*i-f*h, B=-(d*i-f*g), C=d*h-e*g, det=a*A+b*B+c*C;
+    if(!isFinite(det)||Math.abs(det)<1e-18) return null;
+    return [A/det,-(b*i-c*h)/det,(b*f-c*e)/det, B/det,(a*i-c*g)/det,-(a*f-c*d)/det, C/det,-(a*h-b*g)/det,(a*e-b*d)/det];
+  }
+  function read(p,c){ const t={}; DEFS.forEach(d=>{ const v=parseFloat(p[c+d.k]); t[d.k]=isFinite(v)?v:d.def; }); return t; }
+  const isIdentity=t=>DEFS.every(d=>Math.abs(t[d.k]-d.def)<1e-9);
+  // Forward 3×3 (centred pixel coords, y down): H = Move · (Rotate·Shear·Scale) · Perspective.
+  // Perspective first (it reshapes the image itself), then the in-plane rotate/shear/scale, then the move.
+  function matrix(t,w,h){
+    const n=Math.max(w,h)/2, th=t.Rot*D2R, c=Math.cos(th), s=Math.sin(th), k=Math.tan(t.Shear*D2R);
+    const sc=t.Scale/100, sx=sc*Math.pow(2,t.Aspect/200), sy=sc*Math.pow(2,-t.Aspect/200);
+    const A=[c*sx,(c*k-s)*sy,0,  s*sx,(s*k+c)*sy,0,  0,0,1];                // R · Shear · Scale
+    const T=[1,0,t.X/100*w,  0,1,t.Y/100*h,  0,0,1];
+    const P=[1,0,0,  0,1,0,  PERSP_MAX*t.PX/100/n, PERSP_MAX*t.PY/100/n, 1];
+    return mul(T,mul(A,P));
+  }
+  // Index of a neighbour that falls outside the plane: stretch / wrap / mirror, or -1 = "use the fill".
+  function remap(i,N,mode){
+    if(i>=0&&i<N) return i;
+    if(mode==='clamp') return i<0?0:N-1;
+    if(mode==='wrap'){ i%=N; return i<0?i+N:i; }
+    if(mode==='mirror'){ const P=2*N; i%=P; if(i<0) i+=P; return i<N?i:P-1-i; }
+    return -1;                                        // 'black' / 'keep'
+  }
+  // out(i,j) = plane sampled at Hi·(i,j) — one channel, written into interleaved RGBA at offset ch.
+  function warpChannel(plane,W,H,Hi,mode,dst,ch){
+    const hw=W/2, hh=H/2, Wm1=W-1, Hm1=H-1, keep=(mode==='keep');
+    const a0=Hi[0],a1=Hi[1],a2=Hi[2], b0=Hi[3],b1=Hi[4],b2=Hi[5], c0=Hi[6],c1=Hi[7],c2=Hi[8];
+    const proj=Math.abs(c0)>1e-12||Math.abs(c1)>1e-12;                  // affine → no divide per pixel
+    for(let j=0;j<H;j++){
+      const Y=j+0.5-hh, X0=0.5-hw, row=j*W;
+      let un=a0*X0+a1*Y+a2, vn=b0*X0+b1*Y+b2, ln=c0*X0+c1*Y+c2, o=(row<<2)+ch;
+      for(let i=0;i<W;i++,o+=4,un+=a0,vn+=b0,ln+=c0){
+        let u=un, v=vn;
+        if(proj){ if(ln<=EPS){ dst[o]=keep?plane[row+i]:0; continue; }   // behind the "camera" → nothing to show
+          const r=1/ln; u*=r; v*=r; }
+        const sx=u+hw-0.5, sy=v+hh-0.5, x0=Math.floor(sx), y0=Math.floor(sy), fx=sx-x0, fy=sy-y0;
+        if(x0>=0&&y0>=0&&x0<Wm1&&y0<Hm1){                              // fast path: all four neighbours inside
+          const k=y0*W+x0, p00=plane[k], p10=plane[k+1], p01=plane[k+W], p11=plane[k+W+1];
+          dst[o]=p00+(p10-p00)*fx+(p01-p00)*fy+(p00-p10-p01+p11)*fx*fy;
+        }else{
+          const fill=keep?plane[row+i]:0;
+          const xa=remap(x0,W,mode), xb=remap(x0+1,W,mode), ya=remap(y0,H,mode), yb=remap(y0+1,H,mode);
+          const p00=(xa<0||ya<0)?fill:plane[ya*W+xa], p10=(xb<0||ya<0)?fill:plane[ya*W+xb],
+                p01=(xa<0||yb<0)?fill:plane[yb*W+xa], p11=(xb<0||yb<0)?fill:plane[yb*W+xb];
+          dst[o]=p00+(p10-p00)*fx+(p01-p00)*fy+(p00-p10-p01+p11)*fx*fy;
+        }
+      }
+    }
+  }
+  function apply(src,p){
+    const W=src.width, H=src.height, chans=['r','g','b'].map(c=>read(p,c));
+    if(chans.every(isIdentity)) return src;                            // nothing to do
+    const mode=EDGES.indexOf(p.edge)>=0?p.edge:'clamp';
+    const sd=canvasData(src).data, out=new ImageData(new Uint8ClampedArray(sd),W,H), od=out.data, plane=new Uint8Array(W*H);
+    chans.forEach((t,ch)=>{
+      if(isIdentity(t)) return;                                        // untouched channel = straight copy
+      const Hi=inv3(matrix(t,W,H)); if(!Hi) return;
+      for(let k=0,q=ch;k<plane.length;k++,q+=4) plane[k]=sd[q];
+      warpChannel(plane,W,H,Hi,mode,od,ch);
+    });
+    return dataToCanvas(out);
+  }
+  return {apply, DEFS, EDGES, matrix, inv3, read, isIdentity};
 })();
 
 /* ================================================================== */
@@ -1729,6 +1823,34 @@ function vampPreset(p){
   return preset;
 }
 
+/* ---- Channel Homography controls: the same 8 sliders for R, G and B, one channel
+   shown at a time ("Channel to edit"). Every slider keeps its own param key
+   (rX, gRot, bPX …) so all three channels stay independent and animatable. ---- */
+const HOMOG_CHANNELS=[{c:'r',name:'Red',icon:'🔴'},{c:'g',name:'Green',icon:'🟢'},{c:'b',name:'Blue',icon:'🔵'}];
+function resetHomographyChannel(node){
+  const c=node.params.edit; pushUndo();
+  HomographyFx.DEFS.forEach(d=>{ node.params[c+d.k]=d.def; });
+  const box=node.el&&node.el.querySelector('.params'); if(box) buildParams(node,box);   // sliders back to their defaults
+  scheduleEval();
+}
+function homographyParams(){
+  const out=[{key:'edit',label:'Channel to edit',type:'select',default:'r',
+    options:HOMOG_CHANNELS.map(h=>({value:h.c,label:h.icon+' '+h.name}))},
+    {type:'button',label:'↺ Reset this channel',cls:'ghost',onClick:resetHomographyChannel}];   // up top: reachable without scrolling the sliders
+  HOMOG_CHANNELS.forEach(h=>{
+    const vis=p=>p.edit===h.c;
+    HomographyFx.DEFS.forEach(d=>out.push({ key:h.c+d.k, label:d.label, animLabel:h.name+' · '+d.label, type:'range',
+      min:d.min, max:d.max, step:d.step, default:d.def, dp:d.dp, suffix:d.suffix, showIf:vis }));
+  });
+  out.push({heading:'Options'});
+  out.push({key:'edge',label:'Outside the frame',type:'select',default:'clamp',options:[
+    {value:'clamp',label:'Stretch edge pixels'},{value:'black',label:'Empty (black)'},
+    {value:'wrap',label:'Wrap around'},{value:'mirror',label:'Mirror'},{value:'keep',label:'Keep original channel'}]});
+  out.push({type:'note',label:'Each channel gets its own homography about the image centre: move, rotate, scale, aspect (+ wider / − taller), shear and perspective (+ pushes the right / bottom edge away).'});
+  out.push(MASK_PARAM);
+  return out;
+}
+
 const NODE_TYPES={
   source:{
     title:'Image', icon:'🖼️', inputs:[], source:true,
@@ -1786,6 +1908,14 @@ const NODE_TYPES={
       const chA=ChromaFx.colorChannels(p.channelA), chB=ChromaFx.colorChannels(p.channelB);
       const out=ChromaFx.echo(base,w,h,chA,chB,p.axis,stepPx,copies,p.mode,p.ghost==='dark');
       return maskApply(src, dataToCanvas(out), inputs[1], p.maskSide);
+    }
+  },
+  homography:{
+    title:'Channel Homography', icon:'🧊', inputs:['Image','Mask'], maskPort:1,
+    params:homographyParams(),
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      return maskApply(src, HomographyFx.apply(src,p), inputs[1], p.maskSide);
     }
   },
   wave:{
@@ -2034,7 +2164,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','crop','fgbg','chroma','wave','fill','weave','collage','palette','ascii','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
+const PALETTE=['source','crop','fgbg','chroma','homography','wave','fill','weave','collage','palette','ascii','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
@@ -2316,7 +2446,7 @@ function buildParams(node,container){
       if(pd.href){ const a=document.createElement('a'); a.href=pd.href; a.target='_blank'; a.rel='noopener'; a.textContent=pd.label; a.addEventListener('pointerdown',e=>e.stopPropagation()); d.appendChild(a); }
       else d.textContent=pd.label;
       container.appendChild(d); node._paramEls.push({pd,row:d}); return; }
-    if(pd.type==='button'){ const b=document.createElement('button'); b.className='p-btn'; b.textContent=pd.label;
+    if(pd.type==='button'){ const b=document.createElement('button'); b.className='p-btn'+(pd.cls?' '+pd.cls:''); b.textContent=pd.label;
       b.addEventListener('pointerdown',e=>e.stopPropagation());
       b.addEventListener('click',e=>{ e.stopPropagation(); if(pd.onClick) pd.onClick(node,b); });
       container.appendChild(b); node._paramEls.push({pd,row:b}); return; }
@@ -3053,7 +3183,7 @@ importFile.addEventListener('change',async e=>{
     onBlock();
   }
   function onBlock(){ const n=NODES[blockSel.value]; if(!n) return; paramSel.innerHTML='';
-    rangeParams(n).forEach(p=>{ const o=document.createElement('option'); o.value=p.key; o.textContent=p.label; paramSel.appendChild(o); });
+    rangeParams(n).forEach(p=>{ const o=document.createElement('option'); o.value=p.key; o.textContent=p.animLabel||p.label; paramSel.appendChild(o); });
     if(n.type==='boxes'){ const o=document.createElement('option'); o.value=ORDER_KEY; o.textContent='🔀 Image positions (inputs trade places)'; paramSel.appendChild(o); }
     onParam(); }
   function onParam(){ const n=NODES[blockSel.value]; if(!n) return;
@@ -3164,7 +3294,7 @@ importFile.addEventListener('change',async e=>{
       buildSeq(); prev.width=fw; prev.height=fh; drawFrame(0);
       playBtn.disabled=false; exportBtn.disabled=false; gifBtn.disabled=false; pngBtn.disabled=false;
       exportBtn.textContent='⬇ MP4'; gifBtn.textContent='⬇ GIF'; pngBtn.textContent='⬇ PNG';
-      statusEl.textContent=frames.length+' frames · '+fw+'×'+fh+' · '+pd.label+' '+fmtNum(from)+'→'+fmtNum(to);
+      statusEl.textContent=frames.length+' frames · '+fw+'×'+fh+' · '+(pd.animLabel||pd.label)+' '+fmtNum(from)+'→'+fmtNum(to);
       play();
     }catch(e){ statusEl.textContent='Render failed: '+((e&&e.message)||e); node.params[pd.key]=orig; try{ await runGraph(); }catch(_){}}
     finally{ busy=false; renderBtn.disabled=false; }
