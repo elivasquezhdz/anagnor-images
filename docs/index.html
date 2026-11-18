@@ -833,6 +833,246 @@ const HomographyFx=(function(){
 })();
 
 /* ================================================================== */
+/*  Tile Tilt core                                                     */
+/*  The image is cut into a grid of tiles (selectable size). Every     */
+/*  tile is a flat card in 3-D with its own Pitch / Roll / Yaw — the   */
+/*  same pinhole model (and signs) as Crop & Straighten, per tile.     */
+/*  A PATTERN decides how the tilt changes over the grid:              */
+/*   · vector patterns hand each tile a facing direction + a spin      */
+/*     (dome, rays, rings, swirl, spiral, Mandelbrot, primes, …)       */
+/*   · height-field patterns h(u,v) make each tile a facet tangent to  */
+/*     the surface: it faces down-slope (−∇h) and spins with h         */
+/*     (sine waves, saddle, sinc, Gaussian, plasma, interference …).   */
+/*  The sliders scale the pattern: pitch = A·fy, yaw = −A·fx,          */
+/*  roll = A·spin — so "+ Pitch / + Yaw" bulges a dome toward you.     */
+/*  Patterns with no direction of their own (uniform, checker …) keep  */
+/*  Crop & Straighten's signs: + pitch = top closer, + yaw = right closer. */
+/* ================================================================== */
+const TileTiltFx=(function(){
+  const D2R=Math.PI/180, TAU=Math.PI*2, inv3=HomographyFx.inv3;
+  const clamp1=v=>v>1?1:(v<-1?-1:(v===v?v:0));
+  const det3=m=>m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
+
+  /* ---- small deterministic helpers ---- */
+  function hash01(s,x,y){
+    let h=Math.imul(x|0,374761393)+Math.imul(y|0,668265263)+Math.imul(s|0,1442695041);
+    h=Math.imul(h^(h>>>13),1274126177); h^=h>>>16;
+    return (h>>>0)/4294967296;
+  }
+  const smooth=t=>t*t*(3-2*t);
+  function vnoise(s,x,y){                                    // smooth value noise, −1..1
+    const ix=Math.floor(x), iy=Math.floor(y), fx=smooth(x-ix), fy=smooth(y-iy);
+    const a=hash01(s,ix,iy), b=hash01(s,ix+1,iy), c=hash01(s,ix,iy+1), d=hash01(s,ix+1,iy+1);
+    return (a+(b-a)*fx+(c-a)*fy+(a-b-c+d)*fx*fy)*2-1;
+  }
+  // Ulam spiral: the number at offset (x,y) from the centre tile (y up). 1 at the centre,
+  // 2 to its right, then counter-clockwise.
+  function ulam(x,y){
+    const k=Math.max(Math.abs(x),Math.abs(y)); if(k===0) return 1;
+    const s=(2*k-1)*(2*k-1);
+    if(x===k && y>-k) return s+(y+k);                        // right side, going up
+    if(y===k)         return s+2*k+(k-x);                    // top side, going left
+    if(x===-k)        return s+4*k+(k-y);                    // left side, going down
+    return s+6*k+(x+k);                                      // bottom side, going right
+  }
+  function sieve(maxN){
+    const N=Math.max(100,maxN|0), s=new Uint8Array(N+1).fill(1); s[0]=0; s[1]=0;
+    for(let i=2;i*i<=N;i++) if(s[i]) for(let j=i*i;j<=N;j+=i) s[j]=0;
+    return n=>n>=0&&n<=N&&s[n]===1;
+  }
+
+  /* ---- the pattern library ----
+     vec(t,P)   → [fx, fy, spin]   facing direction (screen x right / y down) + roll multiplier, each −1..1
+     field(P)   → (u,v) => h       height field; facing = −∇h (normalised), spin = h (normalised)
+     t = tile {i,j,n,u,v,r,rn,th}; (u,v) = tile centre from the pattern centre in long-side units (v down),
+     rn = r / farthest-corner distance (0..1), th = angle. P = {K,ph,seed,rmax,cosA,sinA,ci,cj,isPrime}.
+     k = the Frequency the pattern starts with when you pick it; uses = which controls it reacts to. */
+  const rot=(P,u,v)=>[u*P.cosA+v*P.sinA, -u*P.sinA+v*P.cosA];
+  const PAT={
+    dome:   { label:'Radial · Dome (tilt away from centre)', k:4, uses:['centre'],
+              vec:(t,P)=>[t.u/P.rmax, t.v/P.rmax, t.rn] },
+    rays:   { label:'Radial · Rays (sunburst)', k:6, uses:['freq','phase','centre'],
+              vec:(t,P)=>{ const a=Math.max(1,Math.round(P.K))*t.th+P.ph, m=Math.sqrt(t.rn), g=Math.cos(a)*m, s=t.r>1e-9?1/t.r:0;
+                           return [t.u*s*g, t.v*s*g, Math.sin(a)*m]; } },
+    rings:  { label:'Circular · Rings (ripples)', k:4, uses:['freq','phase','centre'],
+              vec:(t,P)=>{ const a=TAU*P.K*t.rn-P.ph, g=Math.sin(a), s=t.r>1e-9?1/t.r:0; return [t.u*s*g, t.v*s*g, Math.cos(a)]; } },
+    swirl:  { label:'Circular · Swirl (tilt around centre)', k:4, uses:['centre'],
+              vec:(t,P)=>[-t.v/P.rmax, t.u/P.rmax, t.rn] },
+    spiral: { label:'Circular · Spiral', k:2, uses:['freq','phase','centre'],
+              vec:(t,P)=>{ const psi=t.th+TAU*P.K*t.rn-P.ph, m=Math.min(1,t.rn*4); return [Math.cos(psi)*m, Math.sin(psi)*m, Math.sin(psi)*m]; } },
+    waves:  { label:'Math · Sine waves (egg-crate)', k:3, uses:['freq','phase','centre','angle'],
+              field:P=>(u,v)=>{ const [x,y]=rot(P,u,v); return Math.sin(TAU*P.K*x+P.ph)*Math.sin(TAU*P.K*y+P.ph); } },
+    stripes:{ label:'Math · Corrugation (sine stripes)', k:5, uses:['freq','phase','centre','angle'],
+              field:P=>(u,v)=>Math.sin(TAU*P.K*(u*P.cosA+v*P.sinA)+P.ph) },
+    saddle: { label:'Math · Saddle (x² − y²)', k:4, uses:['centre','angle'],
+              field:P=>(u,v)=>{ const [x,y]=rot(P,u,v); return x*x-y*y; } },
+    sinc:   { label:'Math · Sinc (sin r / r)', k:4, uses:['freq','centre'],
+              field:P=>(u,v)=>{ const t=TAU*P.K*Math.hypot(u,v)/P.rmax; return t<1e-6?1:Math.sin(t)/t; } },
+    gauss:  { label:'Math · Gaussian bump', k:3, uses:['freq','centre'],
+              field:P=>(u,v)=>{ const q=Math.hypot(u,v)/P.rmax*P.K/2; return Math.exp(-q*q); } },
+    plasma: { label:'Math · Plasma (sum of sines)', k:2, uses:['freq','phase','centre','angle'],
+              field:P=>(u,v)=>{ const [x,y]=rot(P,u,v), k=TAU*P.K;
+                return Math.sin(k*x+P.ph)+Math.sin(k*1.3*y-P.ph)+Math.sin(k*0.7*(x+y)+P.ph)+Math.sin(k*0.9*Math.hypot(x-0.3,y+0.2)-P.ph); } },
+    interf: { label:'Math · Wave interference', k:5, uses:['freq','phase','centre','angle'],
+              field:P=>(u,v)=>{ const [x,y]=rot(P,u,v), k=TAU*P.K;
+                return Math.cos(k*Math.hypot(x+0.2,y)-P.ph)+Math.cos(k*Math.hypot(x-0.2,y)-P.ph); } },
+    mandel: { label:'Math · Mandelbrot set', k:2, uses:['freq','phase','centre'],
+              vec:(t,P)=>{ const span=3.4/Math.max(0.5,P.K/2), cr=-0.6+t.u*span, ci=t.v*span, MAX=64;
+                let zr=0, zi=0, n=0;
+                for(;n<MAX;n++){ const a=zr*zr, b=zi*zi; if(a+b>256) break; zi=2*zr*zi+ci; zr=a-b+cr; }
+                if(n>=MAX) return [0,0,0];                                   // inside the set: flat
+                const nu=n+1-Math.log(Math.log(Math.hypot(zr,zi)))/Math.LN2, psi=nu*0.55-P.ph;
+                return [Math.cos(psi), Math.sin(psi), Math.cos(psi*0.5)]; } },
+    ulam:   { label:'Math · Ulam spiral (primes)', k:4, uses:['centre'],
+              vec:(t,P)=>{ const n=ulam(t.i-P.ci, -(t.j-P.cj)); if(!P.isPrime(n)) return [0,0,0];
+                const a=Math.PI/4+(n%4)*Math.PI/2; return [Math.cos(a), Math.sin(a), 1]; } },
+    sierp:  { label:'Math · Sierpiński (i AND j)', k:4, uses:[],
+              vec:t=>{ const s=((t.i&t.j)===0)?1:0; return [-s,s,s]; } },
+    golden: { label:'Math · Golden angle (phyllotaxis)', k:4, uses:['phase'],
+              vec:(t,P)=>{ const a=t.n*2.399963229728653+P.ph; return [Math.cos(a), Math.sin(a), Math.sin(a*0.5+1)]; } },
+    checker:{ label:'Tiles · Checkerboard', k:4, uses:['freq'],
+              vec:(t,P)=>{ const g=Math.max(1,Math.round(P.K/4)), s=((((t.i/g)|0)+((t.j/g)|0))&1)?1:-1; return [-s,s,s]; } },
+    random: { label:'Tiles · Random (seeded)', k:4, uses:['seed'],
+              vec:(t,P)=>[hash01(P.seed,t.i,t.j)*2-1, hash01(P.seed+101,t.i,t.j)*2-1, hash01(P.seed+202,t.i,t.j)*2-1] },
+    noise:  { label:'Tiles · Smooth noise', k:3, uses:['freq','seed','centre'],
+              vec:(t,P)=>{ const x=t.u*P.K, y=t.v*P.K; return [vnoise(P.seed,x,y), vnoise(P.seed+101,x+31.7,y-12.3), vnoise(P.seed+202,x-7.9,y+55.1)]; } },
+    uniform:{ label:'Tiles · Uniform (all equal)', k:4, uses:[], vec:()=>[-1,1,1] },
+  };
+  const ORDER=['dome','rays','rings','swirl','spiral','waves','stripes','saddle','sinc','gauss','plasma','interf','mandel','ulam','sierp','golden','checker','random','noise','uniform'];
+  const uses=(id,key)=>{ const d=PAT[id]; return !!d && d.uses.indexOf(key)>=0; };
+
+  /* ---- grid: integer-aligned cells so a flat tile is an exact copy of its piece ---- */
+  function layout(W,H,size){
+    const cols=Math.max(1,Math.round(W/size)), rows=Math.max(1,Math.round(H/size)), xs=[], ys=[];
+    for(let i=0;i<=cols;i++) xs.push(Math.round(i*W/cols));
+    for(let j=0;j<=rows;j++) ys.push(Math.round(j*H/rows));
+    return {cols,rows,xs,ys};
+  }
+  // Per-tile pattern values: fx/fy = facing (−1..1), rl = spin (−1..1).
+  function fields(id,W,H,p){
+    const def=PAT[id]||PAT.dome, lay=layout(W,H,Math.max(4,+p.size||60)), cols=lay.cols, rows=lay.rows, N=cols*rows;
+    const L=Math.max(W,H), num=(v,d)=>(isFinite(parseFloat(v))?parseFloat(v):d);
+    const ox=W*num(p.cx,50)/100, oy=H*num(p.cy,50)/100, ang=num(p.angle,0)*D2R;
+    let rmax=1e-6; [[0,0],[W,0],[0,H],[W,H]].forEach(c=>{ rmax=Math.max(rmax,Math.hypot((c[0]-ox)/L,(c[1]-oy)/L)); });
+    const P={ K:num(p.freq,4), ph:num(p.phase,0)*D2R, seed:num(p.seed,7)|0, rmax, cosA:Math.cos(ang), sinA:Math.sin(ang), cols, rows,
+      ci:Math.min(cols-1,Math.max(0,Math.floor(ox/W*cols))), cj:Math.min(rows-1,Math.max(0,Math.floor(oy/H*rows))) };
+    if(id==='ulam'){ const m=2*Math.max(cols,rows)+1; P.isPrime=sieve(m*m); }
+    const fx=new Float32Array(N), fy=new Float32Array(N), rl=new Float32Array(N);
+    const tile=(i,j)=>{ const px=(lay.xs[i]+lay.xs[i+1])/2, py=(lay.ys[j]+lay.ys[j+1])/2, u=(px-ox)/L, v=(py-oy)/L, r=Math.hypot(u,v);
+      return {i,j,n:j*cols+i,u,v,r,rn:Math.min(1,r/rmax),th:Math.atan2(v,u)}; };
+    if(def.vec){
+      for(let j=0;j<rows;j++) for(let i=0;i<cols;i++){ const t=tile(i,j), o=def.vec(t,P); fx[t.n]=clamp1(o[0]); fy[t.n]=clamp1(o[1]); rl[t.n]=clamp1(o[2]); }
+    }else{                                                   // height field: every tile is a facet of the surface
+      const h=def.field(P), e=0.0015, gx=new Float32Array(N), gy=new Float32Array(N), hv=new Float32Array(N);
+      let mg=0, mh=0;
+      for(let j=0;j<rows;j++) for(let i=0;i<cols;i++){ const t=tile(i,j), k=t.n;
+        hv[k]=h(t.u,t.v); gx[k]=(h(t.u+e,t.v)-h(t.u-e,t.v))/(2*e); gy[k]=(h(t.u,t.v+e)-h(t.u,t.v-e))/(2*e);
+        mg=Math.max(mg,Math.hypot(gx[k],gy[k])); mh=Math.max(mh,Math.abs(hv[k])); }
+      for(let k=0;k<N;k++){ fx[k]=mg>1e-9?clamp1(-gx[k]/mg):0; fy[k]=mg>1e-9?clamp1(-gy[k]/mg):0; rl[k]=mh>1e-9?clamp1(hv[k]/mh):0; }
+    }
+    return {cols,rows,xs:lay.xs,ys:lay.ys,fx,fy,rl,P};
+  }
+
+  /* ---- the card in 3-D (same model as Crop & Straighten) ---- */
+  // Forward 3×3 (card-centred px → offset from the tile centre): R = Ry(yaw)·Rx(pitch)·Rz(roll),
+  // the card lies at z=0 so only R's first two columns matter; f = camera distance in px.
+  function cardMatrix(roll,pitch,yaw,f){
+    const a=pitch*D2R, b=yaw*D2R, c=roll*D2R, ca=Math.cos(a), sa=Math.sin(a), cb=Math.cos(b), sb=Math.sin(b), cc=Math.cos(c), sc=Math.sin(c);
+    const m00=cc, m01=-sc, m10=ca*sc, m11=ca*cc, m20=sa*sc, m21=sa*cc;                 // Rx·Rz
+    return [cb*m00+sb*m20, cb*m01+sb*m21, 0,  m10, m11, 0,  (-sb*m00+cb*m20)/f, (-sb*m01+cb*m21)/f, 1];
+  }
+  function cardNormal(roll,pitch,yaw){                                                // unit normal facing the camera
+    const a=pitch*D2R, b=yaw*D2R; return [-Math.sin(b)*Math.cos(a), Math.sin(a), -Math.cos(b)*Math.cos(a)];
+  }
+  // Smallest zoom ≥1 at which the tilted card still covers its whole cell (no gaps).
+  function fillZoom(Hm,hw,hh){
+    const Hi=inv3(Hm); if(!Hi) return 1;
+    const inside=z=>{ for(let c=0;c<4;c++){ const X=(c&1?hw:-hw)/z, Y=(c&2?hh:-hh)/z, a=Hi[0]*X+Hi[1]*Y+Hi[2], b=Hi[3]*X+Hi[4]*Y+Hi[5], l=Hi[6]*X+Hi[7]*Y+Hi[8];
+      if(l<=1e-6||Math.abs(a/l)>hw+1e-6||Math.abs(b/l)>hh+1e-6) return false; } return true; };
+    if(inside(1)) return 1;
+    let lo=1, hi=2; while(!inside(hi)&&hi<64) hi*=2;
+    for(let it=0;it<28;it++){ const m=(lo+hi)/2; if(inside(m)) hi=m; else lo=m; }
+    return hi;
+  }
+  // Largest zoom at which the tilted card fits inside its cell (the caller never enlarges past 1).
+  function fitZoom(Hm,hw,hh){
+    let z=Infinity;
+    for(let c=0;c<4;c++){ const x=c&1?hw:-hw, y=c&2?hh:-hh, w=Hm[6]*x+Hm[7]*y+1, X=(Hm[0]*x+Hm[1]*y)/w, Y=(Hm[3]*x+Hm[4]*y)/w;
+      z=Math.min(z, hw/Math.max(Math.abs(X),1e-9), hh/Math.max(Math.abs(Y),1e-9)); }
+    return z;
+  }
+
+  const FITS=['free','fit','fill'], BGS=['black','white','original','blur'];
+  const LV=(()=>{ const x=-0.35, y=-0.55, z=-0.75, n=Math.hypot(x,y,z); return [x/n,y/n,z/n]; })();   // light: upper-left, toward the viewer
+  function apply(src,p){
+    const W=src.width, H=src.height, num=(v,d)=>(isFinite(parseFloat(v))?parseFloat(v):d);
+    const fit=FITS.indexOf(p.fit)>=0?p.fit:'free', isFill=(fit==='fill'), isFree=(fit==='free');
+    const gap=isFill?0:Math.max(0,Math.min(0.9,num(p.gap,0)/100));
+    const persp=Math.max(0,Math.min(100,num(p.persp,70))), shade=Math.max(0,Math.min(1,num(p.shade,0)/100));
+    const A={pitch:num(p.pitch,0), roll:num(p.roll,0), yaw:num(p.yaw,0)};
+    const F=fields(p.pattern,W,H,p), cols=F.cols, rows=F.rows, xs=F.xs, ys=F.ys;
+    const sd=canvasData(src).data, out=new Uint8ClampedArray(W*H*4);
+    // what shows between / behind the tiles
+    const bgMode=BGS.indexOf(p.bg)>=0?p.bg:'black';
+    if(isFill||bgMode==='original') out.set(sd);
+    else if(bgMode==='blur') out.set(canvasData(blurCanvas(src,Math.max(3,Math.round(num(p.size,60)*0.35)))).data);
+    else { const v=bgMode==='white'?255:0; for(let q=0;q<out.length;q+=4){ out[q]=v; out[q+1]=v; out[q+2]=v; out[q+3]=255; } }
+    const zb=isFree?new Float32Array(W*H).fill(Infinity):null;          // depth: nearer tiles cover farther ones
+    const nl0=-LV[2];
+    for(let j=0;j<rows;j++) for(let i=0;i<cols;i++){
+      const k=j*cols+i, x0=xs[i], x1=xs[i+1], y0=ys[j], y1=ys[j+1], tw=x1-x0, th=y1-y0; if(tw<1||th<1) continue;
+      const pitch=A.pitch*F.fy[k], yaw=-A.yaw*F.fx[k], roll=A.roll*F.rl[k];
+      const hw=tw/2, hh=th/2, cx=x0+hw, cy=y0+hh, f=Math.hypot(hw,hh)*(1.5+8*Math.pow(1-persp/100,2));
+      const Hm=cardMatrix(roll,pitch,yaw,f);
+      let z;
+      if(isFill) z=fillZoom(Hm,hw,hh);
+      else { z=(fit==='fit')?Math.min(1,fitZoom(Hm,hw,hh)):1; z*=(1-gap); }
+      const Hs=[Hm[0]*z,Hm[1]*z,0, Hm[3]*z,Hm[4]*z,0, Hm[6],Hm[7],1], Hi=inv3(Hs); if(!Hi) continue;
+      const detHi=Math.abs(det3(Hi));
+      let bx0,bx1,by0,by1;
+      if(isFill){ bx0=x0; bx1=x1; by0=y0; by1=y1; }
+      else{                                                             // screen box of the projected card
+        let mnx=Infinity, mxx=-Infinity, mny=Infinity, mxy=-Infinity;
+        for(let c=0;c<4;c++){ const x=c&1?hw:-hw, y=c&2?hh:-hh, w=Hs[6]*x+Hs[7]*y+1, X=(Hs[0]*x+Hs[1]*y)/w, Y=(Hs[3]*x+Hs[4]*y)/w;
+          if(X<mnx)mnx=X; if(X>mxx)mxx=X; if(Y<mny)mny=Y; if(Y>mxy)mxy=Y; }
+        bx0=Math.max(0,Math.floor(cx+mnx-1)); bx1=Math.min(W,Math.ceil(cx+mxx+1));
+        by0=Math.max(0,Math.floor(cy+mny-1)); by1=Math.min(H,Math.ceil(cy+mxy+1));
+      }
+      let g=1;                                                          // optional facet shading (neutral when flat)
+      if(shade>0){ const n=cardNormal(roll,pitch,yaw); g=1+1.5*shade*((n[0]*LV[0]+n[1]*LV[1]+n[2]*LV[2])-nl0); g=Math.max(0.25,Math.min(1.75,g)); }
+      const h0=Hi[0],h1=Hi[1],h2=Hi[2],h3=Hi[3],h4=Hi[4],h5=Hi[5],h6=Hi[6],h7=Hi[7],h8=Hi[8], xmax=x1-1, ymax=y1-1;
+      for(let py=by0;py<by1;py++){
+        const Yo=py+0.5-cy, Xo0=bx0+0.5-cx, row=py*W;
+        let a=h0*Xo0+h1*Yo+h2, b=h3*Xo0+h4*Yo+h5, lam=h6*Xo0+h7*Yo+h8;
+        for(let px=bx0;px<bx1;px++,a+=h0,b+=h3,lam+=h6){
+          if(lam<=1e-6) continue;                                       // behind the camera
+          const il=1/lam, lx=a*il, ly=b*il;
+          let cov=1;
+          if(!isFill){                                                  // soft 1-px edge from the distance to the card border
+            cov=0.5+Math.min(hw-Math.abs(lx),hh-Math.abs(ly))/Math.sqrt(detHi*il*il*il);
+            if(cov<=0) continue; if(cov>1) cov=1;
+          }
+          const idx=row+px;
+          if(zb){ if(il>zb[idx]) continue; if(cov>=0.5) zb[idx]=il; }
+          let sx=x0+hw+lx-0.5, sy=y0+hh+ly-0.5;                         // stay inside this tile's own pixels
+          if(sx<x0)sx=x0; else if(sx>xmax)sx=xmax; if(sy<y0)sy=y0; else if(sy>ymax)sy=ymax;
+          const ix=Math.floor(sx), iy=Math.floor(sy), fx=sx-ix, fy=sy-iy, jx=ix<xmax?ix+1:ix, jy=iy<ymax?iy+1:iy;
+          const o00=(iy*W+ix)<<2, o10=(iy*W+jx)<<2, o01=(jy*W+ix)<<2, o11=(jy*W+jx)<<2, o=idx<<2;
+          const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+          for(let c=0;c<4;c++){
+            let v=sd[o00+c]*w00+sd[o10+c]*w10+sd[o01+c]*w01+sd[o11+c]*w11;
+            if(c<3) v*=g;
+            out[o+c]=cov>=1?v:out[o+c]*(1-cov)+v*cov;
+          }
+        }
+      }
+    }
+    return dataToCanvas(new ImageData(out,W,H));
+  }
+  return {apply, fields, layout, PAT, ORDER, uses, ulam, cardMatrix, cardNormal, fillZoom, fitZoom};
+})();
+
+/* ================================================================== */
 /*  Palette: dominant colours (median cut) + a swatch strip            */
 /* ================================================================== */
 const PaletteFx=(function(){
@@ -1851,6 +2091,41 @@ function homographyParams(){
   return out;
 }
 
+/* ---- Tile Tilt controls. The pattern-specific sliders (frequency, phase, rotate, centre, seed)
+   only show for patterns that use them; picking a pattern loads its own starting frequency. ---- */
+function tiletiltParams(){
+  const T=TileTiltFx, U=key=>p=>T.uses(p.pattern,key);
+  const anyPatternCtl=p=>['freq','phase','angle','centre','seed'].some(k=>T.uses(p.pattern,k));
+  const notFill=p=>p.fit!=='fill';
+  return [
+    {key:'pattern',label:'Pattern',type:'select',default:'rings',
+      options:T.ORDER.map(id=>({value:id,label:T.PAT[id].label})),
+      onPick:node=>{ const d=T.PAT[node.params.pattern]; if(d&&T.uses(node.params.pattern,'freq')) node.params.freq=d.k; }},
+    {type:'note',label:'Every tile is a card in 3-D. The pattern decides how its tilt changes across the image; the sliders set the biggest angle.'},
+    {key:'size',label:'Tile size',type:'range',min:8,max:300,step:1,default:60,suffix:' px'},
+    {heading:'Tilt (maximum angle)'},
+    {key:'pitch',label:'Pitch (vertical tilt)',type:'range',min:-80,max:80,step:1,default:35,suffix:'°'},
+    {key:'roll',label:'Roll (spin)',type:'range',min:-180,max:180,step:1,default:0,suffix:'°'},
+    {key:'yaw',label:'Yaw (horizontal tilt)',type:'range',min:-80,max:80,step:1,default:35,suffix:'°'},
+    {heading:'Pattern settings',showIf:anyPatternCtl},
+    {key:'freq',label:'Frequency',type:'range',min:0.5,max:20,step:0.5,default:4,dp:1,showIf:U('freq')},
+    {key:'phase',label:'Phase',type:'range',min:0,max:360,step:1,default:0,suffix:'°',showIf:U('phase')},
+    {key:'angle',label:'Rotate pattern',type:'range',min:0,max:360,step:1,default:0,suffix:'°',showIf:U('angle')},
+    {key:'cx',label:'Centre X',type:'range',min:0,max:100,step:1,default:50,suffix:'%',showIf:U('centre')},
+    {key:'cy',label:'Centre Y',type:'range',min:0,max:100,step:1,default:50,suffix:'%',showIf:U('centre')},
+    {key:'seed',label:'Seed',type:'range',min:1,max:999,step:1,default:7,showIf:U('seed')},
+    {heading:'Look'},
+    {key:'persp',label:'Perspective',type:'range',min:0,max:100,step:1,default:70},
+    {key:'shade',label:'Shading (volume)',type:'range',min:0,max:100,step:1,default:35,suffix:'%'},
+    {key:'fit',label:'Tile scaling',type:'select',default:'free',options:[
+      {value:'free',label:'Free (tiles may overlap)'},{value:'fit',label:'Shrink to fit the cell'},{value:'fill',label:'Zoom to fill the cell'}]},
+    {key:'gap',label:'Gap between tiles',type:'range',min:0,max:40,step:1,default:0,suffix:'%',showIf:notFill},
+    {key:'bg',label:'Behind the tiles',type:'select',default:'blur',showIf:notFill,options:[
+      {value:'black',label:'Black'},{value:'white',label:'White'},{value:'original',label:'Original image'},{value:'blur',label:'Blurred image'}]},
+    MASK_PARAM,
+  ];
+}
+
 const NODE_TYPES={
   source:{
     title:'Image', icon:'🖼️', inputs:[], source:true,
@@ -1916,6 +2191,14 @@ const NODE_TYPES={
     process(inputs,p){
       const src=inputs[0]; if(!src) return null;
       return maskApply(src, HomographyFx.apply(src,p), inputs[1], p.maskSide);
+    }
+  },
+  tiletilt:{
+    title:'Tile Tilt', icon:'💠', inputs:['Image','Mask'], maskPort:1,
+    params:tiletiltParams(),
+    process(inputs,p){
+      const src=inputs[0]; if(!src) return null;
+      return maskApply(src, TileTiltFx.apply(src,p), inputs[1], p.maskSide);
     }
   },
   wave:{
@@ -2164,7 +2447,7 @@ const NODE_TYPES={
 };
 
 // Order the palette buttons.
-const PALETTE=['source','crop','fgbg','chroma','homography','wave','fill','weave','collage','palette','ascii','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
+const PALETTE=['source','crop','fgbg','chroma','homography','tiletilt','wave','fill','weave','collage','palette','ascii','grid','primitive','invert','pixelate','blur','vampire','boxes','channel','slideshow'];
 
 /* ================================================================== */
 /*  Graph state                                                        */
